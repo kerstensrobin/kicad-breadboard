@@ -553,7 +553,7 @@ class BreadboardWindow(wx.Frame):
                     self.board.remove(ref)
                     removed.append(ref)
                 else:
-                    new_type = guess_type_id(ref, comp.value, comp.symbol, comp.lib)
+                    new_type = guess_type_id(ref, comp.value, comp.symbol, comp.lib, comp.description)
                     old_type = self.board.get_placement(ref).type_id
                     if new_type != old_type:
                         self.board.remove(ref)
@@ -1043,7 +1043,7 @@ class BreadboardWindow(wx.Frame):
         n_total = len(self.netlist.components)
         n_shown = sum(
             1 for ref, comp in self.netlist.components.items()
-            if guess_type_id(ref, comp.value, comp.symbol, comp.lib) is not None
+            if guess_type_id(ref, comp.value, comp.symbol, comp.lib, comp.description) is not None
         )
         if n_total == 0:
             self.SetStatusText(

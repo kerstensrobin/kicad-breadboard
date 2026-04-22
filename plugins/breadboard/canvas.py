@@ -1644,7 +1644,7 @@ class BreadboardCanvas(wx.Panel):
                 self._draw_axial_component(dc, comp_def, placed, ref, p1, p2, selected)
         else:
             # 3-pin components
-            _TO92_TYPES = frozenset({'NPN', 'PNP', 'JFET_N', 'JFET_P', 'BS170'})
+            _TO92_TYPES = frozenset({'NPN', 'PNP', 'JFET_N', 'JFET_P', 'BS170', 'NMOS', 'PMOS'})
             if placed.type_id in _TO92_TYPES:
                 # Ammo-pack style TO-92: small D-shaped body elevated above holes,
                 # three thin wire leads sticking out to each pin hole.
@@ -2146,7 +2146,7 @@ class BreadboardCanvas(wx.Panel):
         xs = [xy[0] for xy in holes_xy]
         ys = [xy[1] for xy in holes_xy]
 
-        _TO92_TYPES = frozenset({'NPN', 'PNP', 'JFET_N', 'JFET_P', 'BS170'})
+        _TO92_TYPES = frozenset({'NPN', 'PNP', 'JFET_N', 'JFET_P', 'BS170', 'NMOS', 'PMOS'})
         base_color = wx.Colour(comp_def.color)
         ghost_color = wx.Colour(base_color.Red(), base_color.Green(), base_color.Blue(), 0x88)
 

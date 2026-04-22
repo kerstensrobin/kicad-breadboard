@@ -244,6 +244,27 @@ BS170 = ComponentDef(
     color='#404040',
 )
 
+# Generic N-channel MOSFET (any symbol containing NMOS/MOSFET that isn't BS170)
+# Matches KiCad Transistor_FET convention for modern parts (2N7002, AO3400…): pin 1=G, 2=S, 3=D
+NMOS = ComponentDef(
+    type_id='NMOS',
+    display_name='N-ch MOSFET',
+    ref_prefix='Q',
+    pin_offsets={1: PinOffset(0), 2: PinOffset(1), 3: PinOffset(2)},
+    pin_names={1: 'G', 2: 'S', 3: 'D'},
+    color='#404040',
+)
+
+# Generic P-channel MOSFET (AO3401A, BS250…): pin 1=G, 2=S, 3=D
+PMOS = ComponentDef(
+    type_id='PMOS',
+    display_name='P-ch MOSFET',
+    ref_prefix='Q',
+    pin_offsets={1: PinOffset(0), 2: PinOffset(1), 3: PinOffset(2)},
+    pin_names={1: 'G', 2: 'S', 3: 'D'},
+    color='#404040',
+)
+
 # ---------------------------------------------------------------------------
 # TO-92 pinout variants.
 #
@@ -269,6 +290,17 @@ TO92_PINOUT_VARIANTS: Dict[str, List[Tuple[str, Dict[int, PinOffset]]]] = {
     'JFET_P': [
         ('S-G-D', {1: PinOffset(0), 2: PinOffset(1), 3: PinOffset(2)}),
         ('D-G-S', {3: PinOffset(0), 2: PinOffset(1), 1: PinOffset(2)}),
+    ],
+    # MOSFET pinouts: pin 1=G, 2=S, 3=D (KiCad Transistor_FET convention: 2N7002, AO3401A…)
+    'NMOS': [
+        ('G-S-D', {1: PinOffset(0), 2: PinOffset(1), 3: PinOffset(2)}),  # 2N7002 …
+        ('S-G-D', {2: PinOffset(0), 1: PinOffset(1), 3: PinOffset(2)}),
+        ('D-G-S', {3: PinOffset(0), 1: PinOffset(1), 2: PinOffset(2)}),
+    ],
+    'PMOS': [
+        ('G-S-D', {1: PinOffset(0), 2: PinOffset(1), 3: PinOffset(2)}),  # AO3401A …
+        ('S-G-D', {2: PinOffset(0), 1: PinOffset(1), 3: PinOffset(2)}),
+        ('D-G-S', {3: PinOffset(0), 1: PinOffset(1), 2: PinOffset(2)}),
     ],
 }
 
@@ -382,24 +414,27 @@ ALL_DEFS: Dict[str, ComponentDef] = {
         RESISTOR, CAPACITOR, CAPACITOR_ELECTROLYTIC, INDUCTOR,
         DIODE, ZENER, LED,
         POTENTIOMETER,
-        NPN_BJT, PNP_BJT, JFET_N, JFET_P, BS170,
+        NPN_BJT, PNP_BJT, JFET_N, JFET_P, BS170, NMOS, PMOS,
         TL081, RC4558, TL084, OPAMP_SPICE,
     ]
 }
 
 
-def guess_type_id(ref: str, value: str, symbol: str, lib: str = '') -> Optional[str]:
+def guess_type_id(ref: str, value: str, symbol: str, lib: str = '',
+                  description: str = '') -> Optional[str]:
     """
     Heuristically map a KiCad component to a ComponentDef type_id.
 
-    ref    : schematic reference, e.g. 'R1', 'Q3', 'U1'
-    value  : component value, e.g. '10k', 'BC547', 'TL081'
-    symbol : KiCad symbol name from the netlist libsource, e.g. 'R', 'NPN', 'TL081'
-    lib    : KiCad library name from the netlist libsource, e.g. 'Device', 'Simulation_SPICE'
+    ref         : schematic reference, e.g. 'R1', 'Q3', 'U1'
+    value       : component value, e.g. '10k', 'BC547', 'TL081'
+    symbol      : KiCad symbol name from the netlist libsource, e.g. 'R', 'NPN', 'TL081'
+    lib         : KiCad library name from the netlist libsource, e.g. 'Device', 'Simulation_SPICE'
+    description : libsource description, e.g. '0.1A Id, 60V Vds, N-Channel MOSFET, TO-92'
     """
     v = value.upper()
     s = symbol.upper()
     l = lib.upper()
+    d = description.upper()
 
     # Exact value/symbol matches first
     for key in ('TL084', 'RC4558', 'TL081', 'BS170'):
@@ -420,8 +455,10 @@ def guess_type_id(ref: str, value: str, symbol: str, lib: str = '') -> Optional[
         return 'JFET_P'
     if 'JFET' in s or 'NJFE' in s:
         return 'JFET_N'
+    if 'PMOS' in s or ('MOSFET' in s and 'P' in s):
+        return 'PMOS'
     if 'NMOS' in s or 'MOSFET' in s:
-        return 'BS170'
+        return 'NMOS'
 
     # Reference prefix fallback
     prefix = ''.join(c for c in ref if c.isalpha()).upper()
@@ -458,5 +495,16 @@ def guess_type_id(ref: str, value: str, symbol: str, lib: str = '') -> Optional[
             if 'SPICE' in l or 'SIMULATION' in l:
                 return 'OPAMP_SPICE'
             return 'TL081'
+
+    # Description-based fallback: works for Transistor_BJT / Transistor_FET library
+    # parts whose symbol name is the part number (2N2219, BC807, 2N7002, AO3401A…).
+    if 'NPN' in d and 'TRANSISTOR' in d:
+        return 'NPN'
+    if 'PNP' in d and 'TRANSISTOR' in d:
+        return 'PNP'
+    if 'P-CHANNEL' in d and 'MOSFET' in d:
+        return 'PMOS'
+    if ('N-CHANNEL' in d or 'N-CH' in d) and 'MOSFET' in d:
+        return 'NMOS'
 
     return None
