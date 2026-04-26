@@ -37,26 +37,43 @@ TO92_CARD_H = 48   # taller to accommodate the pinout row
 CARD_PAD    = 4
 SWATCH_W    = 12
 
+# Maximum pixel width available for text inside a card.
+# card spans CARD_PAD … CARD_PAD+CARD_W; text starts at SWATCH_W+8 from card left,
+# with a 4 px right margin before the card border.
+_TEXT_MAX_W = CARD_W - SWATCH_W - 8 - 4   # = 86 px
+
 # Cycle-button dimensions (TO-92 cards only)
 _BTN_W = 16
 _BTN_H = 12
 _BTN_RIGHT_PAD = 4   # gap between button right edge and card right edge
 
 
+def _clip_text(dc: wx.DC, text: str, max_w: int) -> str:
+    """Return text truncated with '…' so it fits within max_w pixels on dc."""
+    if dc.GetTextExtent(text)[0] <= max_w:
+        return text
+    ellipsis = '\u2026'
+    budget = max_w - dc.GetTextExtent(ellipsis)[0]
+    while text and dc.GetTextExtent(text)[0] > budget:
+        text = text[:-1]
+    return text + ellipsis
+
+
 # ── Custom-paint implementation (GTK / Linux) ─────────────────────────────
 
 class _PaintCard:
     """Pure data — no wx widget."""
-    __slots__ = ('ref', 'comp', 'comp_def', 'y', 'height', 'pinout_idx')
+    __slots__ = ('ref', 'comp', 'comp_def', 'y', 'height', 'pinout_idx', 'rpi_long_labels')
 
     def __init__(self, ref: str, comp: NetlistComponent,
                  comp_def: Optional[ComponentDef], y: int, height: int):
-        self.ref        = ref
-        self.comp       = comp
-        self.comp_def   = comp_def
-        self.y          = y       # top-left y in virtual (unscrolled) coordinates
-        self.height     = height
-        self.pinout_idx = 0       # index into TO92_PINOUT_VARIANTS[type_id]
+        self.ref             = ref
+        self.comp            = comp
+        self.comp_def        = comp_def
+        self.y               = y       # top-left y in virtual (unscrolled) coordinates
+        self.height          = height
+        self.pinout_idx      = 0       # index into TO92_PINOUT_VARIANTS[type_id]
+        self.rpi_long_labels = False   # RPi extended alt-function pin names
 
 
 class _PaintComponentTray(wx.ScrolledWindow):
@@ -68,6 +85,7 @@ class _PaintComponentTray(wx.ScrolledWindow):
         self.netlist = netlist
         self._cards: List[_PaintCard] = []
         self.on_pick = None
+        self.on_rpi_label_mode = None   # callback(bool)
 
         self.SetScrollRate(0, CARD_H + CARD_PAD)
         self.SetBackgroundColour('#d8d8d8')
@@ -93,7 +111,7 @@ class _PaintComponentTray(wx.ScrolledWindow):
         self._cards.clear()
         y = CARD_PAD
         for ref, comp in sorted(netlist.components.items()):
-            type_id  = guess_type_id(ref, comp.value, comp.symbol, comp.lib)
+            type_id  = guess_type_id(ref, comp.value, comp.symbol, comp.lib, comp.description, comp.pin_count)
             if type_id is None:
                 continue
             comp_def = ALL_DEFS.get(type_id)
@@ -161,10 +179,12 @@ class _PaintComponentTray(wx.ScrolledWindow):
 
             type_suffix = f' - {card.comp_def.type_id}' if card.comp_def else ''
             dc.SetFont(font_bold)
-            dc.DrawText(f'{card.ref}{type_suffix}', x + SWATCH_W + 8, y + 4)
+            dc.DrawText(_clip_text(dc, f'{card.ref}{type_suffix}', _TEXT_MAX_W),
+                        x + SWATCH_W + 8, y + 4)
 
             dc.SetFont(font_normal)
-            dc.DrawText(card.comp.value[:14], x + SWATCH_W + 8, y + 18)
+            dc.DrawText(_clip_text(dc, card.comp.value, _TEXT_MAX_W),
+                        x + SWATCH_W + 8, y + 18)
 
             # Pinout row (TO-92 only)
             if card.height > CARD_H and card.comp_def:
@@ -187,6 +207,8 @@ class _PaintComponentTray(wx.ScrolledWindow):
                         tw, th = dc.GetTextExtent('>')
                         dc.DrawText('>', btn_x + (_BTN_W - tw) // 2,
                                     btn_y + (_BTN_H - th) // 2)
+
+
 
             # Border
             dc.SetBrush(wx.TRANSPARENT_BRUSH)
@@ -216,6 +238,8 @@ class _PaintComponentTray(wx.ScrolledWindow):
                     self.Refresh()
                     return
 
+
+
         if placed or card.comp_def is None:
             return
         if self.on_pick is not None:
@@ -239,24 +263,26 @@ class _NativeCard(wx.Panel):
                  is_to92: bool = False):
         h = TO92_CARD_H if is_to92 else CARD_H
         super().__init__(parent, size=(CARD_W, h), style=wx.BORDER_SIMPLE)
-        self.ref          = ref
-        self.comp         = comp
-        self.comp_def     = comp_def
-        self.board        = board
-        self._is_to92     = is_to92
-        self._swatch_color = comp_def.color if comp_def else '#aaaaaa'
-        self.pinout_idx   = 0
+        self.ref              = ref
+        self.comp             = comp
+        self.comp_def         = comp_def
+        self.board            = board
+        self._is_to92         = is_to92
+        self._swatch_color    = comp_def.color if comp_def else '#aaaaaa'
+        self.pinout_idx       = 0
 
         self._swatch = wx.Panel(self, pos=(4, 4), size=(SWATCH_W, h - 8))
 
         type_suffix = f' - {comp_def.type_id}' if comp_def else ''
         self._ref_lbl = wx.StaticText(
-            self, label=f'{ref}{type_suffix}', pos=(SWATCH_W + 8, 3))
+            self, label=f'{ref}{type_suffix}', pos=(SWATCH_W + 8, 3),
+            size=(_TEXT_MAX_W, -1), style=wx.ST_ELLIPSIZE_END)
         self._ref_lbl.SetFont(wx.Font(8, wx.FONTFAMILY_DEFAULT,
                                       wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
 
         self._val_lbl = wx.StaticText(
-            self, label=comp.value[:14], pos=(SWATCH_W + 8, 18))
+            self, label=comp.value, pos=(SWATCH_W + 8, 18),
+            size=(_TEXT_MAX_W, -1), style=wx.ST_ELLIPSIZE_END)
         self._val_lbl.SetFont(wx.Font(7, wx.FONTFAMILY_DEFAULT,
                                       wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
 
@@ -272,15 +298,17 @@ class _NativeCard(wx.Panel):
                                                   wx.FONTWEIGHT_NORMAL))
                 if len(variants) > 1:
                     btn_x = CARD_W - _BTN_W - _BTN_RIGHT_PAD
-                    self._cycle_lbl = wx.StaticText(
-                        self, label='>', pos=(btn_x + 3, 31))
+                    self._cycle_lbl = wx.Button(
+                        self, label='>', pos=(btn_x, 28),
+                        size=(_BTN_W, _BTN_H + 2))
                     self._cycle_lbl.SetFont(wx.Font(7, wx.FONTFAMILY_DEFAULT,
                                                      wx.FONTSTYLE_NORMAL,
                                                      wx.FONTWEIGHT_BOLD))
-
         for w in filter(None, [self, self._swatch, self._ref_lbl, self._val_lbl,
-                                self._pinout_lbl, self._cycle_lbl]):
+                                self._pinout_lbl]):
             w.Bind(wx.EVT_LEFT_DOWN, self._on_click)
+        if self._cycle_lbl is not None:
+            self._cycle_lbl.Bind(wx.EVT_BUTTON, self._on_cycle_btn)
 
         self._apply_colors()
 
@@ -313,13 +341,14 @@ class _NativeCard(wx.Panel):
             if self._pinout_lbl:
                 self._pinout_lbl.SetLabel(variants[self.pinout_idx][0])
 
+    def _on_cycle_btn(self, _evt) -> None:
+        placed = self.board.get_placement(self.ref) is not None
+        if not placed:
+            self._cycle_pinout()
+
     def _on_click(self, evt: wx.MouseEvent) -> None:
         placed = self.board.get_placement(self.ref) is not None
         if placed or self.comp_def is None:
-            return
-
-        if evt.GetEventObject() is self._cycle_lbl:
-            self._cycle_pinout()
             return
 
         comp_def = self.comp_def
@@ -342,6 +371,7 @@ class _NativeComponentTray(wx.ScrolledWindow):
         self.netlist = netlist
         self._cards: List[_NativeCard] = []
         self.on_pick = None
+        self.on_rpi_label_mode = None   # callback(bool)
 
         self.SetScrollRate(0, CARD_H + CARD_PAD)
         self.SetBackgroundColour('#d8d8d8')
@@ -369,7 +399,7 @@ class _NativeComponentTray(wx.ScrolledWindow):
 
         y = CARD_PAD
         for ref, comp in sorted(netlist.components.items()):
-            type_id  = guess_type_id(ref, comp.value, comp.symbol, comp.lib)
+            type_id  = guess_type_id(ref, comp.value, comp.symbol, comp.lib, comp.description, comp.pin_count)
             if type_id is None:
                 continue
             comp_def = ALL_DEFS.get(type_id)

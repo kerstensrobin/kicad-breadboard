@@ -15,6 +15,7 @@ Top-level structure:
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Union
@@ -102,8 +103,9 @@ def _val(node: Optional[List]) -> str:
 @dataclass
 class NetlistPin:
     ref: str
-    pin: int         # pin number (0 if non-numeric / named pin)
-    pintype: str = ''  # KiCad pin type, e.g. 'power_in', 'input', 'output', 'passive'
+    pin: int              # pin number (0 if non-numeric / named pin)
+    pintype: str = ''     # KiCad pin type, e.g. 'power_in', 'input', 'output', 'passive'
+    pinfunction: str = '' # KiCad pin function/name from the symbol, e.g. 'OUTPUT', 'GND', 'TRIG'; '~' if unnamed
 
 
 @dataclass
@@ -120,6 +122,7 @@ class NetlistComponent:
     symbol: str      # KiCad part name, e.g. 'R', 'NPN', 'TL081'
     lib: str
     description: str = ''
+    pin_count: int = 0  # number of distinct pins appearing in nets
 
 
 @dataclass
@@ -141,6 +144,18 @@ class Netlist:
             if net.name == name:
                 return net
         return None
+
+    def pinfunction_map(self, ref: str) -> Dict[int, str]:
+        """Return {pin_num: pinfunction} for a component from the netlist pin data.
+        KiCad appends _{pin_number} to disambiguate duplicate function names (e.g. '+_2');
+        that suffix is stripped here."""
+        result: Dict[int, str] = {}
+        for net in self.nets:
+            for pin in net.pins:
+                if pin.ref == ref and pin.pin and pin.pinfunction and pin.pinfunction != '~':
+                    fn = re.sub(r'_\d+$', '', pin.pinfunction)
+                    result[pin.pin] = fn
+        return result
 
     def power_net_names(self) -> List[str]:
         candidates = []
@@ -198,9 +213,19 @@ def parse(path: str | Path) -> Netlist:
                 except ValueError:
                     pin_num = 0
                 pintype = _val(_find(node, 'pintype'))
+                pinfunction = _val(_find(node, 'pinfunction'))
                 if nref:
-                    pins.append(NetlistPin(ref=nref, pin=pin_num, pintype=pintype))
+                    pins.append(NetlistPin(ref=nref, pin=pin_num, pintype=pintype, pinfunction=pinfunction))
             nets.append(Net(code=code, name=name, pins=pins))
+
+    # Back-fill pin_count on each component from what appears in the nets
+    _pins_seen: Dict[str, set] = {}
+    for net in nets:
+        for pin in net.pins:
+            _pins_seen.setdefault(pin.ref, set()).add(pin.pin)
+    for _ref, _pins in _pins_seen.items():
+        if _ref in components:
+            components[_ref].pin_count = len(_pins)
 
     return Netlist(components=components, nets=nets)
 

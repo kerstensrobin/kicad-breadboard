@@ -264,7 +264,7 @@ def validate(board: Breadboard, netlist: Netlist) -> ValidationResult:
     # type_id and are handled via terminal assignments instead.
     for ref, comp in netlist.components.items():
         if board.get_placement(ref) is None:
-            type_id = guess_type_id(ref, comp.value, comp.symbol, comp.lib)
+            type_id = guess_type_id(ref, comp.value, comp.symbol, comp.lib, comp.description, comp.pin_count)
             if type_id is not None:
                 result.issues.append(ValidationIssue(
                     kind=IssueKind.UNPLACED,

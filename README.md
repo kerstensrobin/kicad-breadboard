@@ -5,10 +5,12 @@ A KiCad 9 / 10 Action Plugin for introductory analog electronics courses at the 
 ## What it does
 
 - Renders a breadboard in six configurable sizes: mini (170 holes), half (400), full (830), double (2× full stacked), triple (3× full with vertical power rails), or double rails (2× full with vertical power rails on both sides)
-- Parses a KiCad netlist and shows all placeable components in a side tray
-- Two-step placement for 2-pin components: click pin 1, then click pin 2
+- Parses a KiCad netlist and shows all placeable components in a side tray — **any U-prefix IC with an even pin count is supported automatically**, even if it is not in the built-in list (555 timers, 74xx logic gates, CD4xxx, counters, shift registers, …)
+- Two-step placement for 2-pin components: click pin 1, then click pin 2; diagonal placement and power-rail connections are preserved when the component is moved later
 - Single-click placement for DIP ICs and 3-pin components (BJT, POT); DIP bodies show the reference and value (e.g. U1 / RC4558) for quick identification
-- TO-92 components (BJT, JFET) show the current pinout order (e.g. C-B-E or E-B-C) on their card; click `>` to cycle variants before placing
+- **Pin functions toggle** (toolbar): shows the KiCad pin function name (e.g. TRIG, THRESH, GND) on every placed DIP IC instead of pin numbers; short labels stay vertical, long labels angle automatically to avoid overlap
+- TO-92 transistors (BJT, JFET, MOSFET) show the current pinout order (e.g. C-B-E or G-S-D) on their card; click `>` to cycle variants before placing
+- Film capacitors render as flat rectangles with the value printed on the body (e.g. C5 100nF); electrolytic capacitors render as top-down circles with a polarity stripe
 - Draw jumper wires between any two holes (tie strip, rail, or binding post)
 - Validate the board against the schematic: highlights open nets (?) and shorts (⚡)
 - Export the board as a PNG or SVG image
@@ -29,9 +31,39 @@ A KiCad 9 / 10 Action Plugin for introductory analog electronics courses at the 
 | Potentiometer | 3-pin |
 | NPN / PNP BJT | TO-92 |
 | N / P-channel JFET | TO-92 |
+| N-channel MOSFET (generic) | TO-92 |
+| P-channel MOSFET (generic) | TO-92 |
 | BS170 MOSFET | TO-92 |
 | TL081 (single), RC4558 (dual), TL084 (quad) op-amp | DIP-8 / DIP-14 |
-| OPAMP (KiCad Simulation_SPICE) | Logical 5-pin |
+| OPAMP (KiCad Simulation_SPICE) | DIP-6 (labelled "SIM") |
+| Arduino Nano (+ Every, ESP32, RP2040 Connect, …) | 30-pin module |
+| Arduino Uno R3 | 32-pin module |
+| Teensy 4.1 | 48-pin module |
+| Raspberry Pi (40-pin GPIO header) | 40-pin module |
+
+### Transistor detection
+
+Components are identified from the KiCad netlist. The plugin recognises transistors in two ways:
+
+- **Generic symbols** (`Device:NPN`, `Device:PMOS`, `Device:NMOS`, etc.) are detected from their symbol name.
+- **Specific part-number symbols** (`Transistor_BJT:BC547`, `Transistor_FET:2N7002`, etc.) are detected from the component description exported by KiCad (e.g. *"NPN Transistor"*, *"N-Channel MOSFET"*).
+
+This means any BJT or MOSFET from the standard KiCad libraries will appear in the component tray automatically.
+
+### Pinout selection for TO-92 transistors
+
+Different physical components that share the same schematic symbol can have a different pin order on the actual package. The tray card for each transistor shows its current pinout (e.g. **C-B-E** or **E-B-C** for a BJT, **G-S-D** or **S-G-D** for a MOSFET). Click **`>`** on the card to cycle through the available variants before placing.
+
+**Always verify the pinout against your component's datasheet.** The default shown is a common convention, but it may not match your specific part:
+
+| Type | Default (plugin) | Example parts that need a different variant |
+|---|---|---|
+| NPN BJT | C-B-E | 2N3904, 2N2222 → E-B-C |
+| PNP BJT | C-B-E | 2N3906 → E-B-C |
+| N-ch JFET | S-G-D | 2N5457 → D-G-S |
+| N-ch MOSFET | G-S-D | Parts where pin 1 = Drain (e.g. BS108) → D-G-S |
+| P-ch MOSFET | G-S-D | Check datasheet for your specific part |
+| BS170 | S-G-D | — (fixed, single pinout) |
 
 ---
 
@@ -122,6 +154,7 @@ Open **File → Preferences…** to configure the plugin. Settings take effect i
 | Setting | Description |
 |---|---|
 | Show signal labels | Draw net names next to holes on the board |
+| Show hotkey reference | Show or hide the hotkey reference panel at the bottom of the right side panel |
 
 ### Export
 
@@ -240,6 +273,15 @@ pip install wxPython
 cd /path/to/kicad-breadboard
 python -m plugins.breadboard.standalone path/to/circuit.net
 ```
+
+---
+
+---
+
+## In the press
+
+- [**Hackaday** — *This KiCad Plugin Enables Breadboarding*](https://hackaday.com/2026/04/23/this-kicad-plugin-enables-breadboarding/) (April 2026)
+- [**Adafruit Blog** — *KiCad Breadboard Builder*](https://blog.adafruit.com/2026/04/24/kicad-breadboard-builder/) (April 2026)
 
 ---
 

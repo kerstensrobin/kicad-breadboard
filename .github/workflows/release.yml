@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build plugin ZIP
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          ZIP_NAME="kicad-breadboard-${VERSION}.zip"
+          zip -r "$ZIP_NAME" plugins/
+          echo "ZIP_NAME=$ZIP_NAME" >> "$GITHUB_ENV"
+          echo "SHA256=$(sha256sum $ZIP_NAME | awk '{print $1}')" >> "$GITHUB_ENV"
+
+      - name: Update metadata.json with version and hash
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          REPO="https://github.com/${{ github.repository }}"
+          python3 - <<'EOF'
+          import json, os
+          version = os.environ['VERSION'] if 'VERSION' in os.environ else '${{ steps.version.outputs.version }}'
+          sha256  = os.environ['SHA256']
+          zip_name = os.environ['ZIP_NAME']
+          repo = os.environ['REPO'] if 'REPO' in os.environ else '${{ github.repository }}'
+
+          with open('metadata.json') as f:
+              meta = json.load(f)
+
+          meta['versions'][0]['version'] = version
+          meta['versions'][0]['download_sha256'] = sha256
+          meta['versions'][0]['download_url'] = f"{repo}/releases/download/v{version}/{zip_name}"
+
+          with open('metadata.json', 'w') as f:
+              json.dump(meta, f, indent=2)
+          EOF
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          REPO: https://github.com/${{ github.repository }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ZIP_NAME }}
+          body: |
+            ## Installation via KiCad PCM
+            Open KiCad → Plugin and Content Manager → install from ZIP, or wait for the official addon repository to pick up the update.
+
+            **SHA-256:** `${{ env.SHA256 }}`

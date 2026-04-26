@@ -125,7 +125,17 @@ class Terminal:
         return f"Terminal({self.name})"
 
 
-Hole = Union[TieHole, RailHole, Terminal]
+@dataclass(frozen=True)
+class ModulePin:
+    """A pin on a free-floating PCB module (Arduino, RPi Pico, …) placed off the breadboard."""
+    ref: str   # component reference, e.g. 'MCU1'
+    pin: int   # pin number
+
+    def __repr__(self):
+        return f"ModulePin({self.ref}, {self.pin})"
+
+
+Hole = Union[TieHole, RailHole, Terminal, ModulePin]
 
 
 class UnionFind:
@@ -169,7 +179,7 @@ class PlacedComponent:
     ref: str
     type_id: str                         # matches ComponentDef.type_id
     pin_holes: Dict[int, Hole]          # pin_number → hole
-    flipped: bool = False               # DIP ICs only: horizontally mirrored
+    flipped: int = 0                    # DIP ICs: 0/1 (mirrored); RPi modules: 0-3 (CW rotation)
 
 
 @dataclass
@@ -198,6 +208,7 @@ class Breadboard:
         self._probe_holes:   Dict[str, Optional[Hole]]       = {n: None for n in PROBE_NAMES}
         self._probe_nets:    Dict[str, str]                  = {n: ''   for n in PROBE_NAMES}
         self._probe_offsets: Dict[str, Tuple[int, int]]      = {n: (0, 0) for n in PROBE_NAMES}
+        self._module_positions: Dict[str, Tuple[int, int]]  = {}  # ref → (canvas_x, canvas_y)
 
     # ------------------------------------------------------------------
     # Static breadboard topology
@@ -240,6 +251,7 @@ class Breadboard:
         self._placements[component.ref] = component
 
     def remove(self, ref: str) -> Optional[PlacedComponent]:
+        self._module_positions.pop(ref, None)
         return self._placements.pop(ref, None)
 
     def get_placement(self, ref: str) -> Optional[PlacedComponent]:
@@ -347,6 +359,22 @@ class Breadboard:
     @property
     def probe_nets(self) -> Dict[str, str]:
         return dict(self._probe_nets)
+
+    # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Module positions (free-floating PCB boards)
+    # ------------------------------------------------------------------
+
+    def set_module_position(self, ref: str, mx: int, my: int) -> None:
+        self._module_positions[ref] = (mx, my)
+
+    def get_module_position(self, ref: str) -> Optional[Tuple[int, int]]:
+        return self._module_positions.get(ref)
+
+    @property
+    def module_positions(self) -> Dict[str, Tuple[int, int]]:
+        return dict(self._module_positions)
 
     # ------------------------------------------------------------------
 

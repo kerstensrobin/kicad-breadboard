@@ -38,6 +38,7 @@ class Preferences:
     baseboard_color: str = '#3d6fa8'   # baseboard fill colour
     show_branding: bool = False        # draw branding image on the baseboard
     branding_image: str = ''           # path to custom branding image (empty = built-in default)
+    show_hotkeys: bool = True          # show hotkey reference panel in the side tray
     load_on_startup: bool = False      # restore these saved settings on next launch
 
 
