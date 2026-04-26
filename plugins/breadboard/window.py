@@ -893,14 +893,14 @@ class BreadboardWindow(wx.Frame):
     def _on_check_updates(self, _evt) -> None:
         import urllib.request, json, webbrowser
         releases_url = f'https://github.com/{REPO}/releases'
-        api_url      = f'https://api.github.com/repos/{REPO}/tags'
+        api_url      = f'https://api.github.com/repos/{REPO}/releases/latest'
         wx.BeginBusyCursor()
         try:
             req = urllib.request.Request(api_url,
                                          headers={'User-Agent': 'kicad-breadboard'})
             with urllib.request.urlopen(req, timeout=6) as r:
-                tags = json.loads(r.read())
-            latest = tags[0]['name'] if tags else None
+                data = json.loads(r.read())
+            latest = data.get('tag_name') if data else None
         except Exception:
             latest = None
         finally:
