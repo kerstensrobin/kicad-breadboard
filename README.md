@@ -69,6 +69,8 @@ Different physical components that share the same schematic symbol can have a di
 
 ## Installation in KiCad 9 or 10
 
+> Built on CachyOS — tested on CachyOS, Ubuntu, and Windows.
+
 ### Step 1 — Clone the repository
 
 ```bash
