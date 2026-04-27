@@ -26,24 +26,50 @@ jobs:
           echo "ZIP_NAME=$ZIP_NAME" >> "$GITHUB_ENV"
           echo "SHA256=$(sha256sum $ZIP_NAME | awk '{print $1}')" >> "$GITHUB_ENV"
 
-      - name: Update metadata.json with version and hash
+      - name: Generate metadata.json
         run: |
-          VERSION=${{ steps.version.outputs.version }}
-          REPO="https://github.com/${{ github.repository }}"
           python3 - <<'EOF'
           import json, os
-          version = os.environ['VERSION'] if 'VERSION' in os.environ else '${{ steps.version.outputs.version }}'
-          sha256  = os.environ['SHA256']
+          version  = os.environ['VERSION']
+          sha256   = os.environ['SHA256']
           zip_name = os.environ['ZIP_NAME']
-          repo = os.environ['REPO'] if 'REPO' in os.environ else '${{ github.repository }}'
-
-          with open('metadata.json') as f:
-              meta = json.load(f)
-
-          meta['versions'][0]['version'] = version
-          meta['versions'][0]['download_sha256'] = sha256
-          meta['versions'][0]['download_url'] = f"{repo}/releases/download/v{version}/{zip_name}"
-
+          repo     = os.environ['REPO']
+          meta = {
+            "$schema": "https://go.kicad.org/pcm/schemas/v1",
+            "name": "Breadboard Builder",
+            "description": "Place schematic components on a virtual breadboard and validate wiring against the KiCad netlist.",
+            "description_full": "A KiCad Action Plugin for introductory analog electronics courses.\n\nStudents draw a schematic in Eeschema, then use this plugin to wire up the same circuit on a virtual breadboard — placing components, drawing jumper wires, and validating their work against the schematic.\n\nFeatures:\n- Six configurable breadboard sizes (mini to triple)\n- Parses KiCad netlists; shows all placeable components in a side tray\n- Supports resistors, capacitors, diodes, LEDs, BJTs, JFETs, MOSFETs, op-amps, and more\n- Validate wiring against the schematic (open nets and shorts)\n- Export to PNG or SVG\n- Save/load board sessions (.kicad_bbrd)\n- Instrument probes: function generator, oscilloscope, PSU",
+            "identifier": "com.github.kerstensrobin.kicad-breadboard",
+            "type": "plugin",
+            "author": {
+              "name": "Robin Kerstens",
+              "contact": {
+                "email": "kerstensrobin@gmail.com",
+                "web": "https://github.com/kerstensrobin/kicad-breadboard"
+              }
+            },
+            "maintainer": {
+              "name": "Robin Kerstens",
+              "contact": {
+                "email": "kerstensrobin@gmail.com",
+                "web": "https://github.com/kerstensrobin/kicad-breadboard"
+              }
+            },
+            "license": "GPL-3.0-or-later",
+            "resources": {
+              "homepage": "https://github.com/kerstensrobin/kicad-breadboard"
+            },
+            "versions": [
+              {
+                "version": version,
+                "status": "stable",
+                "kicad_version": "9.0",
+                "download_url": f"{repo}/releases/download/v{version}/{zip_name}",
+                "download_sha256": sha256,
+                "install_size": 0
+              }
+            ]
+          }
           with open('metadata.json', 'w') as f:
               json.dump(meta, f, indent=2)
           EOF
