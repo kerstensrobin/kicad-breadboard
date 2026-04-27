@@ -1,4 +1,0 @@
--  also, the usb and barrel jack can be longer. the usb can be a square, with the barreljack being having the
-   same length but a bit thinner
-- in the vertical positions, the usb and barrel jack are drawn next to the board with a significant
-  offset.
