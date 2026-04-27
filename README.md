@@ -1,9 +1,11 @@
+
 # KiCad Breadboard Builder <img src="images/icon.png" height="45">
 
 A KiCad 9 / 10 plugin for introductory analog electronics courses at the University of Antwerp. Draw your schematic in Eeschema, then wire it up on a virtual breadboard and validate it against the schematic.
 
-![breadboard](images/breadboard.png)
-
+<img width="1784" height="953" alt="Screenshot from 2026-04-27 16-59-01" src="https://github.com/user-attachments/assets/c13cd047-ecd1-4b14-8953-b5d5b911a5ad" />
+ 
+ 
 **In the press:**
 - [Hackaday — *This KiCad Plugin Enables Breadboarding*](https://hackaday.com/2026/04/23/this-kicad-plugin-enables-breadboarding/)
 - [Adafruit Blog — *KiCad Breadboard Builder*](https://blog.adafruit.com/2026/04/24/kicad-breadboard-builder/)
