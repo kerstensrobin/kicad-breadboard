@@ -1900,13 +1900,11 @@ class BreadboardCanvas(wx.Panel):
                                    wx.FONTWEIGHT_NORMAL))
                 dc.SetTextForeground('#222222')
                 label_gap = 4
-                pfmap = self.netlist.pinfunction_map(ref) if self.netlist else {}
                 for pin_num, hole in placed.pin_holes.items():
                     pxy = lay.hole_xy(hole)
                     if pxy is None:
                         continue
-                    name = (pfmap.get(pin_num)
-                            or comp_def.pin_names.get(pin_num, str(pin_num)))
+                    name = comp_def.pin_names.get(pin_num, str(pin_num))
                     ptw, pth = dc.GetTextExtent(name)
                     if in_top:
                         dc.DrawText(name, pxy[0] - ptw // 2, pin_y + label_gap)

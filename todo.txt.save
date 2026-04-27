@@ -1,0 +1,3 @@
+- Arduino uno module looks should also be improved. Add a long black rectangle to represent the ATmega, also a grey square for the USB port and a black square for the barrel jack. Split up the black GPIO pins. in the downloads folder 'arduino-pinout.png' is a simplified version of an Arduino nano which you can use as a reference.
+- move 'Pin functions' button to the components tray, right below the title 'Components' make it a checkbox to toggle the 'pin functions'
+- it feels slow on my machine. Did we introduce something very heavy?
