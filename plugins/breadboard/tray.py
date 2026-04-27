@@ -48,6 +48,40 @@ _BTN_H = 12
 _BTN_RIGHT_PAD = 4   # gap between button right edge and card right edge
 
 
+def _netlist_pinout_idx(type_id: str, pfmap: dict) -> int:
+    """Return the variant index whose computed physical order matches its label."""
+    if not pfmap or type_id not in TO92_PINOUT_VARIANTS:
+        return 0
+    variants = TO92_PINOUT_VARIANTS[type_id]
+    for i, (label, pin_offsets) in enumerate(variants):
+        physical = {}
+        for pin, offset in pin_offsets.items():
+            if pin in pfmap:
+                physical[offset.col_delta] = pfmap[pin]
+        if len(physical) != len(pin_offsets):
+            continue
+        computed = '-'.join(physical[j] for j in sorted(physical))
+        if computed == label:
+            return i
+    return 0
+
+
+def _pinout_label(type_id: str, pinout_idx: int, pfmap: dict) -> str:
+    """Physical pin order label, derived from pfmap+variant when available."""
+    variants = TO92_PINOUT_VARIANTS.get(type_id, [])
+    if not variants or pinout_idx >= len(variants):
+        return ''
+    label, pin_offsets = variants[pinout_idx]
+    if pfmap:
+        physical = {}
+        for pin, offset in pin_offsets.items():
+            if pin in pfmap:
+                physical[offset.col_delta] = pfmap[pin]
+        if len(physical) == len(pin_offsets):
+            return '-'.join(physical[j] for j in sorted(physical))
+    return label
+
+
 def _clip_text(dc: wx.DC, text: str, max_w: int) -> str:
     """Return text truncated with '…' so it fits within max_w pixels on dc."""
     if dc.GetTextExtent(text)[0] <= max_w:
@@ -63,7 +97,7 @@ def _clip_text(dc: wx.DC, text: str, max_w: int) -> str:
 
 class _PaintCard:
     """Pure data — no wx widget."""
-    __slots__ = ('ref', 'comp', 'comp_def', 'y', 'height', 'pinout_idx', 'rpi_long_labels')
+    __slots__ = ('ref', 'comp', 'comp_def', 'y', 'height', 'pinout_idx', 'rpi_long_labels', 'pfmap')
 
     def __init__(self, ref: str, comp: NetlistComponent,
                  comp_def: Optional[ComponentDef], y: int, height: int):
@@ -74,6 +108,7 @@ class _PaintCard:
         self.height          = height
         self.pinout_idx      = 0       # index into TO92_PINOUT_VARIANTS[type_id]
         self.rpi_long_labels = False   # RPi extended alt-function pin names
+        self.pfmap           = {}      # {pin_num: pinfunction} from netlist
 
 
 class _PaintComponentTray(wx.ScrolledWindow):
@@ -116,8 +151,11 @@ class _PaintComponentTray(wx.ScrolledWindow):
                 continue
             comp_def = ALL_DEFS.get(type_id)
             h = TO92_CARD_H if type_id in TO92_PINOUT_VARIANTS else CARD_H
-            self._cards.append(_PaintCard(ref=ref, comp=comp, comp_def=comp_def,
-                                          y=y, height=h))
+            card = _PaintCard(ref=ref, comp=comp, comp_def=comp_def, y=y, height=h)
+            if type_id in TO92_PINOUT_VARIANTS:
+                card.pfmap      = netlist.pinfunction_map(ref)
+                card.pinout_idx = _netlist_pinout_idx(type_id, card.pfmap)
+            self._cards.append(card)
             y += h + CARD_PAD
 
         total_h = y if self._cards else CARD_PAD
@@ -191,7 +229,8 @@ class _PaintComponentTray(wx.ScrolledWindow):
             if card.height > CARD_H and card.comp_def:
                 variants = TO92_PINOUT_VARIANTS.get(card.comp_def.type_id, [])
                 if variants:
-                    pinout_label = variants[card.pinout_idx][0]
+                    pinout_label = _pinout_label(card.comp_def.type_id,
+                                                 card.pinout_idx, card.pfmap)
                     dc.SetFont(font_pinout)
                     dc.SetTextForeground(fg)
                     dc.DrawText(pinout_label, x + SWATCH_W + 8, y + 32)
@@ -261,7 +300,7 @@ class _NativeCard(wx.Panel):
 
     def __init__(self, parent, ref: str, comp: NetlistComponent,
                  comp_def: Optional[ComponentDef], board: Breadboard,
-                 is_to92: bool = False):
+                 is_to92: bool = False, pfmap: dict = None):
         h = TO92_CARD_H if is_to92 else CARD_H
         super().__init__(parent, size=(CARD_W, h), style=wx.BORDER_SIMPLE)
         self.ref              = ref
@@ -270,7 +309,9 @@ class _NativeCard(wx.Panel):
         self.board            = board
         self._is_to92         = is_to92
         self._swatch_color    = comp_def.color if comp_def else '#aaaaaa'
-        self.pinout_idx       = 0
+        self.pfmap            = pfmap or {}
+        type_id               = comp_def.type_id if comp_def else ''
+        self.pinout_idx       = _netlist_pinout_idx(type_id, self.pfmap)
 
         self._swatch = wx.Panel(self, pos=(4, 4), size=(SWATCH_W, h - 8))
 
@@ -294,7 +335,8 @@ class _NativeCard(wx.Panel):
             variants = TO92_PINOUT_VARIANTS.get(comp_def.type_id, [])
             if variants:
                 self._pinout_lbl = wx.StaticText(
-                    self, label=variants[0][0], pos=(SWATCH_W + 8, 32))
+                    self, label=_pinout_label(comp_def.type_id, self.pinout_idx, self.pfmap),
+                    pos=(SWATCH_W + 8, 32))
                 self._pinout_lbl.SetFont(wx.Font(6, wx.FONTFAMILY_DEFAULT,
                                                   wx.FONTSTYLE_NORMAL,
                                                   wx.FONTWEIGHT_NORMAL))
@@ -341,7 +383,8 @@ class _NativeCard(wx.Panel):
         if len(variants) > 1:
             self.pinout_idx = (self.pinout_idx + 1) % len(variants)
             if self._pinout_lbl:
-                self._pinout_lbl.SetLabel(variants[self.pinout_idx][0])
+                self._pinout_lbl.SetLabel(
+                    _pinout_label(self.comp_def.type_id, self.pinout_idx, self.pfmap))
 
     def _on_cycle_btn(self, _evt) -> None:
         placed = self.board.get_placement(self.ref) is not None
@@ -407,8 +450,9 @@ class _NativeComponentTray(wx.ScrolledWindow):
             comp_def = ALL_DEFS.get(type_id)
             is_to92  = type_id in TO92_PINOUT_VARIANTS
             h        = TO92_CARD_H if is_to92 else CARD_H
+            pfmap    = netlist.pinfunction_map(ref) if is_to92 else {}
             card = _NativeCard(self, ref=ref, comp=comp, comp_def=comp_def,
-                               board=self.board, is_to92=is_to92)
+                               board=self.board, is_to92=is_to92, pfmap=pfmap)
             card.SetPosition(wx.Point(CARD_PAD, y))
             self._cards.append(card)
             y += h + CARD_PAD
