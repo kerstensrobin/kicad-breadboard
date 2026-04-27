@@ -711,14 +711,16 @@ def guess_type_id(ref: str, value: str, symbol: str, lib: str = '',
         return 'Arduino_Nano'
     if 'TEENSY' in v or 'TEENSY' in s:
         return 'Teensy_41'
-    # RPi Pico: any board using the standard 40-pin Pico header.
+    # RPi Pico / full-size Pi: any board using the standard 40-pin GPIO header.
     # Catches: RaspberryPi_Pico, RaspberryPi_Pico_W, RaspberryPi_Pico_Debug,
-    #          RaspberryPi_Pico_Extensive, RP2040, RP2350A/B, RP2354A/B, etc.
+    #          RaspberryPi_Pico_Extensive, RP2040, RP2350A/B, RP2354A/B,
+    #          Raspberry_Pi_4, Raspberry_Pi_3B, etc.
     if ('PICO' in v or 'PICO' in s
             or 'RP2040' in v or 'RP2040' in s
             or 'RP2350' in v or 'RP2350' in s
             or 'RP2354' in v or 'RP2354' in s
-            or 'RASPBERRYPI' in v or 'RASPBERRYPI' in s):
+            or 'RASPBERRYPI' in v or 'RASPBERRYPI' in s
+            or 'RASPBERRY_PI' in v or 'RASPBERRY_PI' in s):
         return 'RPi_Pico'
 
     # Exact value/symbol matches first

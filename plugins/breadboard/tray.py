@@ -177,7 +177,8 @@ class _PaintComponentTray(wx.ScrolledWindow):
             fg = '#888888' if placed else '#222222'
             dc.SetTextForeground(fg)
 
-            type_suffix = f' - {card.comp_def.type_id}' if card.comp_def else ''
+            type_suffix = (f' - {card.comp_def.type_id}'
+                           if card.comp_def and not card.comp_def.is_module else '')
             dc.SetFont(font_bold)
             dc.DrawText(_clip_text(dc, f'{card.ref}{type_suffix}', _TEXT_MAX_W),
                         x + SWATCH_W + 8, y + 4)
@@ -273,7 +274,8 @@ class _NativeCard(wx.Panel):
 
         self._swatch = wx.Panel(self, pos=(4, 4), size=(SWATCH_W, h - 8))
 
-        type_suffix = f' - {comp_def.type_id}' if comp_def else ''
+        type_suffix = (f' - {comp_def.type_id}'
+                       if comp_def and not comp_def.is_module else '')
         self._ref_lbl = wx.StaticText(
             self, label=f'{ref}{type_suffix}', pos=(SWATCH_W + 8, 3),
             size=(_TEXT_MAX_W, -1), style=wx.ST_ELLIPSIZE_END)
