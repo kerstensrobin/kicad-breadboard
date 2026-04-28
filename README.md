@@ -275,4 +275,23 @@ python -m plugins.breadboard.standalone path/to/circuit.net
 
 ---
 
+## Troubleshooting
+
+<details>
+<summary>macOS: "Update from schematic" says kicad-cli not found</summary>
+
+When KiCad is launched from Finder, the Dock, or Spotlight, macOS does not pass your shell `PATH` to the application. The plugin handles this automatically by falling back to the standard KiCad install location (`/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli`).
+
+If you installed KiCad somewhere other than `/Applications` the fallback will not find it either. In that case, launch KiCad from Terminal instead:
+
+```bash
+open -a KiCad
+```
+
+This passes your shell environment (including `PATH`) to KiCad and the plugin will find `kicad-cli` normally.
+
+</details>
+
+---
+
 Made with ♥ by [nacho.works](https://nacho.works) and [University of Antwerp](https://www.uantwerpen.be/en/), Belgium.

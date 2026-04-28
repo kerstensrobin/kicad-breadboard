@@ -14,6 +14,7 @@ Layout:
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -532,6 +533,19 @@ class BreadboardWindow(wx.Frame):
         self._netlist_path = path
         self._load_netlist(path)
 
+    @staticmethod
+    def _find_kicad_cli() -> str:
+        import shutil
+        import sys
+        cli = shutil.which('kicad-cli')
+        if cli:
+            return cli
+        if sys.platform == 'darwin':
+            bundle = '/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli'
+            if os.path.isfile(bundle):
+                return bundle
+        return 'kicad-cli'
+
     def _export_netlist(self, silent: bool = False) -> Optional[Path]:
         """
         Run kicad-cli to export the netlist from the project schematic.
@@ -555,7 +569,7 @@ class BreadboardWindow(wx.Frame):
 
         try:
             result = subprocess.run(
-                ['kicad-cli', 'sch', 'export', 'netlist',
+                [self._find_kicad_cli(), 'sch', 'export', 'netlist',
                  '--format', 'kicadsexpr', '-o', str(net_path), str(sch)],
                 capture_output=True, text=True, timeout=30,
             )
