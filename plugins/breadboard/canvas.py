@@ -108,12 +108,6 @@ MODULE_PIN_R     = 4    # header pad circle radius
 MODULE_LABEL_GAP = 4    # gap between pad edge and label text
 MODULE_HEADER_H  = 10   # height of the black header strip along each long edge
 
-# Per-type inner body height (px between top and bottom pin-row centres).
-_MODULE_BODY_H: Dict[str, int] = {
-    'Arduino_Nano': 3 * PITCH,  # rows three grid-steps apart — aligns to hole grid in any rotation
-    'Arduino_Uno':  4 * PITCH,  # rows four grid-steps apart — aligns to hole grid in any rotation
-    'RPi_Pico':         PITCH,  # rows one grid-step apart — aligns to hole grid in any rotation
-}
 _RPi_BOARD_H         = 140  # total RPi board height for landscape orientation
 _RPi_PORTRAIT_PITCH  = 10  # pin pitch for portrait orientations (smaller than 18 to keep board compact)
 
@@ -126,6 +120,14 @@ MARGIN = 20         # outer margin
 SECTION_GAP = 0     # stacked board sections touch — no gap between them
 VERT_STRIP_X = 54   # x-width allocated for the two vertical rails (triple layout)
 BRAND_STRIP = 80    # extra space (px) added on the binding-post side for the brand image
+
+# Per-type inner body height (px between top and bottom pin-row centres).
+_MODULE_BODY_H: Dict[str, int] = {
+    'Arduino_Nano': 3 * PITCH,  # rows three grid-steps apart — aligns to hole grid in any rotation
+    'Arduino_Uno':  4 * PITCH,  # rows four grid-steps apart — aligns to hole grid in any rotation
+    'RPi_Pico':     5 * PITCH + CENTER_GAP,  # rows five grid-steps apart, spanning the centre gap — aligns to hole grid in any rotation
+    'Raspberry_Pi_4':   PITCH,  # rows one grid-step apart — aligns to hole grid in any rotation
+}
 
 # Binding posts (circular)
 TERM_R = 30         # radius of binding-post circle
@@ -2467,8 +2469,12 @@ class BreadboardCanvas(wx.Panel):
             xs = [xy[0] for xy in holes_xy]
             ys = [xy[1] for xy in holes_xy]
             if comp_def and comp_def.is_module:
-                # Use generous padding to cover the full board body, not just GPIO pins
-                pad_x, pad_y = 90, 120
+                if comp_def.type_id == 'Raspberry_Pi_4':
+                    # Massive padding needed for the full-size RPi board
+                    pad_x, pad_y = 90, 120
+                else:
+                    # Pico, Nano, and Uno have pins close to their board edges
+                    pad_x, pad_y = 10, 10
             elif comp_def and comp_def.pin_count >= 3 and not comp_def.is_dip:
                 # TO-92 dome extends r_body=12px beyond the pin row
                 pad_x, pad_y = 6, 14
@@ -3611,8 +3617,11 @@ class BreadboardCanvas(wx.Panel):
                                ref: str, mx: int, my: int,
                                selected: bool, ghost: bool = False,
                                flipped: bool = False) -> None:
-        if comp_def.type_id == 'RPi_Pico':
+        if comp_def.type_id == 'Raspberry_Pi_4':
             self._draw_rpi_board_at(dc, comp_def, ref, mx, my, selected, ghost, flipped)
+            return
+        if comp_def.type_id == 'RPi_Pico':
+            self._draw_pico_board_at(dc, comp_def, ref, mx, my, selected, ghost, flipped)
             return
         self._draw_nano_board_at(dc, comp_def, ref, mx, my, selected, ghost, flipped)
 
@@ -3852,6 +3861,220 @@ class BreadboardCanvas(wx.Panel):
             dc.SetFont(wx.Font(6, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
             rw, rh = dc.GetTextExtent(ref)
             dc.DrawText(ref, name_cx - rw//2, name_cy + nh + 2)
+    
+    def _draw_pico_board_at(self, dc: wx.DC, comp_def: ComponentDef,
+                             ref: str, mx: int, my: int,
+                             selected: bool, ghost: bool = False,
+                             flipped: bool = False) -> None:
+        rot      = int(flipped) % 4
+        bh       = self._body_h(comp_def)
+        max_col  = max((o.col_delta for o in comp_def.pin_offsets.values()), default=0)
+        P        = MODULE_PIN_PITCH
+        PAD      = MODULE_BODY_PAD
+        HH       = MODULE_HEADER_H
+        PIN_R    = MODULE_PIN_R
+        board_color  = wx.Colour(comp_def.color)
+        border_color = wx.Colour('#1a1a1a')
+        pad_color    = wx.Colour('#e0b030') # Signature Pico gold pads
+        r, g, b  = board_color.Red(), board_color.Green(), board_color.Blue()
+
+        ps = max_col * P
+        USB_SHORT = 22
+
+        if rot == 0:
+            body_x = mx - PAD;       body_y = my - PAD
+            body_w = ps + PAD * 2;   body_h = bh + PAD * 2
+            hdr1 = (body_x + 1, body_y,              body_w - 2, HH)
+            hdr2 = (body_x + 1, body_y + body_h - HH, body_w - 2, HH)
+            def _pin_xy(o): return mx + o.col_delta * P, my + (bh if o.cross_gap else 0)
+            usb_rect = (body_x - 12, body_y + (body_h - USB_SHORT) // 2, 16, USB_SHORT)
+        elif rot == 1:
+            body_x = mx - bh - PAD;  body_y = my - PAD
+            body_w = bh + PAD * 2;   body_h = ps + PAD * 2
+            hdr1 = (body_x + body_w - HH, body_y + 1, HH, body_h - 2)
+            hdr2 = (body_x,               body_y + 1, HH, body_h - 2)
+            def _pin_xy(o): return mx - (bh if o.cross_gap else 0), my + o.col_delta * P
+            usb_rect = (body_x + (body_w - USB_SHORT) // 2, body_y - 12, USB_SHORT, 16)
+        elif rot == 2:
+            body_x = mx - ps - PAD;  body_y = my - bh - PAD
+            body_w = ps + PAD * 2;   body_h = bh + PAD * 2
+            hdr1 = (body_x + 1, body_y + body_h - HH, body_w - 2, HH)
+            hdr2 = (body_x + 1, body_y,               body_w - 2, HH)
+            def _pin_xy(o): return mx - o.col_delta * P, my - (bh if o.cross_gap else 0)
+            usb_rect = (body_x + body_w - 4, body_y + (body_h - USB_SHORT) // 2, 16, USB_SHORT)
+        else:  # rot == 3
+            body_x = mx - PAD;        body_y = my - ps - PAD
+            body_w = bh + PAD * 2;    body_h = ps + PAD * 2
+            hdr1 = (body_x,               body_y + 1, HH, body_h - 2)
+            hdr2 = (body_x + body_w - HH, body_y + 1, HH, body_h - 2)
+            def _pin_xy(o): return mx + (bh if o.cross_gap else 0), my - o.col_delta * P
+            usb_rect = (body_x + (body_w - USB_SHORT) // 2, body_y + body_h - 4, USB_SHORT, 16)
+
+        inner_cx, inner_cy = body_x + body_w // 2, body_y + body_h // 2
+        landscape = rot in (0, 2)
+
+        if ghost:
+            gfill = wx.Colour(min(255, r+70), min(255, g+70), min(255, b+70))
+            dc.SetBrush(wx.Brush(gfill))
+            dc.SetPen(wx.Pen(wx.Colour('#888888'), 1, wx.PENSTYLE_DOT))
+            dc.DrawRoundedRectangle(body_x, body_y, body_w, body_h, 3)
+            dc.SetBrush(wx.Brush(wx.Colour('#555555')))
+            dc.SetPen(wx.TRANSPARENT_PEN)
+            dc.DrawRectangle(*hdr1)
+            dc.DrawRectangle(*hdr2)
+            return
+
+        if selected:
+            dc.SetBrush(_transparent_brush())
+            dc.SetPen(wx.Pen('#00ccff', 3))
+            dc.DrawRoundedRectangle(body_x - 4, body_y - 4, body_w + 8, body_h + 8, 6)
+
+        # PCB body
+        dc.SetBrush(wx.Brush(board_color))
+        dc.SetPen(wx.Pen(border_color, 1))
+        dc.DrawRoundedRectangle(body_x, body_y, body_w, body_h, 3)
+
+        # USB
+        dc.SetBrush(wx.Brush(wx.Colour('#d8d8d8')))
+        dc.SetPen(wx.Pen(wx.Colour('#aaaaaa'), 1))
+        dc.DrawRectangle(*usb_rect)
+
+        # Header strips
+        dc.SetBrush(wx.Brush(wx.Colour('#1c1c1c')))
+        dc.SetPen(wx.TRANSPARENT_PEN)
+        dc.DrawRectangle(*hdr1)
+        dc.DrawRectangle(*hdr2)
+
+        # Hardware Details (RP2040, BOOTSEL, Shield)
+        chip_s = 20
+        dc.SetBrush(wx.Brush(wx.Colour('#111111')))
+        dc.SetPen(wx.Pen(wx.Colour('#444444'), 1))
+        dc.DrawRectangle(inner_cx - chip_s//2, inner_cy - chip_s//2, chip_s, chip_s)
+
+        btn_s = 10
+        boff = (ps // 2) - 25
+        if rot == 0:   bx, by = inner_cx - boff, inner_cy
+        elif rot == 1: bx, by = inner_cx, inner_cy - boff
+        elif rot == 2: bx, by = inner_cx + boff, inner_cy
+        else:          bx, by = inner_cx, inner_cy + boff
+        dc.SetBrush(wx.Brush(wx.Colour('#f0f0f0')))
+        dc.SetPen(wx.Pen(wx.Colour('#aaaaaa'), 1))
+        dc.DrawRectangle(bx - btn_s//2, by - btn_s//2, btn_s, btn_s)
+
+        shield_w, shield_h = 24, 24
+        soff = (ps // 2) - 15
+        if rot == 0:   sx, sy = inner_cx + soff, inner_cy
+        elif rot == 1: sx, sy = inner_cx, inner_cy + soff
+        elif rot == 2: sx, sy = inner_cx - soff, inner_cy
+        else:          sx, sy = inner_cx, inner_cy - soff
+        dc.SetBrush(wx.Brush(wx.Colour('#c0c0c0')))
+        dc.SetPen(wx.Pen(wx.Colour('#999999'), 1))
+        dc.DrawRectangle(sx - shield_w//2, sy - shield_h//2, shield_w, shield_h)
+
+        # Ground pins list map (squares)
+        gnd_pins = {3, 8, 13, 18, 23, 28, 33, 38}
+        
+        dc.SetBrush(wx.Brush(pad_color))
+        dc.SetPen(wx.Pen(wx.Colour('#b8860b'), 1))
+        for pin_num, offset in comp_def.pin_offsets.items():
+            px, py = _pin_xy(offset)
+            if pin_num in gnd_pins: 
+                dc.DrawRectangle(px - PIN_R, py - PIN_R, PIN_R*2, PIN_R*2)
+            else:            
+                dc.DrawCircle(px, py, PIN_R)
+
+        # Pin labels (Rotated 90 degrees to prevent overlapping names)
+        txt_color = wx.Colour('#ffffff')
+        gc_lbl = _make_gc(dc)
+        if gc_lbl is not None:
+            _font_lbl = wx.Font(5, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
+            gc_lbl.SetFont(gc_lbl.CreateFont(_font_lbl, txt_color))
+            for pin_num, offset in comp_def.pin_offsets.items():
+                px, py = _pin_xy(offset)
+                name = comp_def.pin_names.get(pin_num, str(pin_num))
+                tw, th = gc_lbl.GetTextExtent(name)
+                gc_lbl.PushState()
+                if rot == 0:
+                    if not offset.cross_gap:
+                        gc_lbl.Translate(float(px), float(py) + HH + 2)
+                        gc_lbl.Rotate(math.pi / 2)
+                        gc_lbl.DrawText(name, 0.0, -float(th) / 2)
+                    else:
+                        gc_lbl.Translate(float(px), float(py) - HH - 2)
+                        gc_lbl.Rotate(-math.pi / 2)
+                        gc_lbl.DrawText(name, 0.0, -float(th) / 2)
+                elif rot == 1:
+                    if not offset.cross_gap:
+                        gc_lbl.Translate(float(px) - HH - 2, float(py))
+                        gc_lbl.DrawText(name, -float(tw), -float(th) / 2)
+                    else:
+                        gc_lbl.Translate(float(px) + HH + 2, float(py))
+                        gc_lbl.DrawText(name, 0.0, -float(th) / 2)
+                elif rot == 2:
+                    if not offset.cross_gap:
+                        gc_lbl.Translate(float(px), float(py) - HH - 2)
+                        gc_lbl.Rotate(-math.pi / 2)
+                        gc_lbl.DrawText(name, 0.0, -float(th) / 2)
+                    else:
+                        gc_lbl.Translate(float(px), float(py) + HH + 2)
+                        gc_lbl.Rotate(math.pi / 2)
+                        gc_lbl.DrawText(name, 0.0, -float(th) / 2)
+                else:
+                    if not offset.cross_gap:
+                        gc_lbl.Translate(float(px) + HH + 2, float(py))
+                        gc_lbl.DrawText(name, 0.0, -float(th) / 2)
+                    else:
+                        gc_lbl.Translate(float(px) - HH - 2, float(py))
+                        gc_lbl.DrawText(name, -float(tw), -float(th) / 2)
+                gc_lbl.PopState()
+        else:
+            dc.SetFont(wx.Font(5, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
+            dc.SetTextForeground(txt_color)
+            for pin_num, offset in comp_def.pin_offsets.items():
+                px, py = _pin_xy(offset)
+                name = comp_def.pin_names.get(pin_num, str(pin_num))
+                tw, th = dc.GetTextExtent(name)
+                if rot == 0:
+                    if not offset.cross_gap: dc.DrawText(name, px - tw//2, py + HH + 2)
+                    else:                    dc.DrawText(name, px - tw//2, py - HH - th - 2)
+                elif rot == 1:
+                    if not offset.cross_gap: dc.DrawText(name, px - HH - tw - 2, py - th//2)
+                    else:                    dc.DrawText(name, px + HH + 2, py - th//2)
+                elif rot == 2:
+                    if not offset.cross_gap: dc.DrawText(name, px - tw//2, py - HH - th - 2)
+                    else:                    dc.DrawText(name, px - tw//2, py + HH + 2)
+                else:
+                    if not offset.cross_gap: dc.DrawText(name, px + HH + 2, py - th//2)
+                    else:                    dc.DrawText(name, px - HH - tw - 2, py - th//2)
+
+        # Board name + ref
+        dc.SetTextForeground(wx.Colour('#ffffff'))
+        dc.SetFont(wx.Font(7, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
+        dname = comp_def.display_name
+        nw, nh = dc.GetTextExtent(dname)
+        
+        if landscape:
+            lbl_cy = inner_cy - chip_s//2 - nh - 4
+            dc.DrawText(dname, inner_cx - nw//2, lbl_cy)
+            if ref:
+                dc.SetFont(wx.Font(6, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+                rw, rh = dc.GetTextExtent(ref)
+                dc.DrawText(ref, inner_cx - rw//2, lbl_cy + nh + 2)
+        else:
+            lbl_cx = inner_cx - chip_s//2 - nh - 4
+            gc_nm = _make_gc(dc)
+            if gc_nm is not None:
+                gc_nm.SetFont(gc_nm.CreateFont(wx.Font(7, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD), wx.Colour('#ffffff')))
+                gc_nm.PushState()
+                gc_nm.Translate(lbl_cx, inner_cy)
+                angle = math.pi / 2 if rot == 1 else -math.pi / 2
+                gc_nm.Rotate(angle)
+                gc_nm.DrawText(dname, -nw / 2, -nh / 2)
+                if ref:
+                    gc_nm.SetFont(gc_nm.CreateFont(wx.Font(6, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL), wx.Colour('#ffffff')))
+                    rw, rh = dc.GetTextExtent(ref)
+                    gc_nm.DrawText(ref, -rw / 2, nh / 2 + 2)
+                gc_nm.PopState()
 
     def _draw_nano_board_at(self, dc: wx.DC, comp_def: ComponentDef,
                              ref: str, mx: int, my: int,

@@ -608,42 +608,57 @@ TEENSY_41 = ComponentDef(
 )
 
 # ---------------------------------------------------------------------------
-# Raspberry Pi — standard 40-pin GPIO header (BCM numbering).
-# Even pins (2,4,6,…,40): col_delta=(pin-2)//2, cross_gap=False (outer/edge row — 5V at edge)
-# Odd pins  (1,3,5,…,39): col_delta=(pin-1)//2, cross_gap=True  (inner row)
+# Raspberry Pi Boards
 # ---------------------------------------------------------------------------
 
+# --- Full-Size Raspberry Pi (40-pin GPIO header) ---
+# Even pins (2,4,6,…,40): col_delta=(pin-2)//2, cross_gap=False (outer/edge row)
+# Odd pins  (1,3,5,…,39): col_delta=(pin-1)//2, cross_gap=True  (inner row)
 def _rpi_gpio_offsets() -> Dict[int, PinOffset]:
     odd  = {n: PinOffset((n - 1) // 2, cross_gap=True)  for n in range(1, 41, 2)}
     even = {n: PinOffset((n - 2) // 2, cross_gap=False) for n in range(2, 41, 2)}
     return {**odd, **even}
 
-RASPBERRY_PI_PICO = ComponentDef(
-    type_id='RPi_Pico',
+RASPBERRY_PI_4 = ComponentDef(
+    type_id='Raspberry_Pi_4',
     display_name='Raspberry Pi',
     ref_prefix='MCU',
     pin_offsets=_rpi_gpio_offsets(),
     pin_names={
-        1:  '3V3',  2:  '5V',
-        3:  'G2',   4:  '5V',
-        5:  'G3',   6:  'GND',
-        7:  'G4',   8:  'G14',
-        9:  'GND',  10: 'G15',
-        11: 'G17',  12: 'G18',
-        13: 'G27',  14: 'GND',
-        15: 'G22',  16: 'G23',
-        17: '3V3',  18: 'G24',
-        19: 'G10',  20: 'GND',
-        21: 'G9',   22: 'G25',
-        23: 'G11',  24: 'G8',
-        25: 'GND',  26: 'G7',
-        27: 'G0',   28: 'G1',
-        29: 'G5',   30: 'GND',
-        31: 'G6',   32: 'G12',
-        33: 'G13',  34: 'GND',
-        35: 'G19',  36: 'G16',
-        37: 'G26',  38: 'G20',
-        39: 'GND',  40: 'G21',
+        1:  '3V3',  2:  '5V',   3:  'G2',   4:  '5V',   5:  'G3',   6:  'GND',
+        7:  'G4',   8:  'G14',  9:  'GND',  10: 'G15',  11: 'G17',  12: 'G18',
+        13: 'G27',  14: 'GND',  15: 'G22',  16: 'G23',  17: '3V3',  18: 'G24',
+        19: 'G10',  20: 'GND',  21: 'G9',   22: 'G25',  23: 'G11',  24: 'G8',
+        25: 'GND',  26: 'G7',   27: 'G0',   28: 'G1',   29: 'G5',   30: 'GND',
+        31: 'G6',   32: 'G12',  33: 'G13',  34: 'GND',  35: 'G19',  36: 'G16',
+        37: 'G26',  38: 'G20',  39: 'GND',  40: 'G21',
+    },
+    color='#388e3c',
+    is_dip=False,
+    is_module=True,
+)
+
+# --- Raspberry Pi Pico (40-pin DIP layout) ---
+def _rpi_pico_offsets() -> Dict[int, PinOffset]:
+    # Landscape layout (USB on the left).
+    # Top row = Right edge of Pico = Pins 40..21 (Pin 40 is Top-Left anchor)
+    # Bottom row = Left edge of Pico = Pins 1..20 (Pin 1 is Bottom-Left)
+    top = {40 - n: PinOffset(n, cross_gap=False) for n in range(20)}
+    bot = {n + 1:  PinOffset(n, cross_gap=True)  for n in range(20)}
+    return {**top, **bot}
+
+RASPBERRY_PI_PICO = ComponentDef(
+    type_id='RPi_Pico',
+    display_name='Raspberry Pi Pico',
+    ref_prefix='MCU',
+    pin_offsets=_rpi_pico_offsets(),
+    pin_names={
+        1: 'GP0', 2: 'GP1', 3: 'GND', 4: 'GP2', 5: 'GP3', 6: 'GP4', 7: 'GP5', 8: 'GND',
+        9: 'GP6', 10: 'GP7', 11: 'GP8', 12: 'GP9', 13: 'GND', 14: 'GP10', 15: 'GP11',
+        16: 'GP12', 17: 'GP13', 18: 'GND', 19: 'GP14', 20: 'GP15',
+        40: 'VBUS', 39: 'VSYS', 38: 'GND', 37: '3V3_EN', 36: '3V3(OUT)', 35: 'ADC_VREF',
+        34: 'GP28', 33: 'GND', 32: 'GP27', 31: 'GP26', 30: 'RUN', 29: 'GP22', 28: 'GND',
+        27: 'GP21', 26: 'GP20', 25: 'GP19', 24: 'GP18', 23: 'GND', 22: 'GP17', 21: 'GP16'
     },
     color='#388e3c',
     is_dip=False,
@@ -727,7 +742,7 @@ ALL_DEFS: Dict[str, ComponentDef] = {
         TL081, RC4558, TL084, OPAMP_SPICE,
         ARDUINO_NANO, ARDUINO_UNO,
         TEENSY_41,
-        RASPBERRY_PI_PICO,
+        RASPBERRY_PI_4, RASPBERRY_PI_PICO,
         SWITCH_SPST, SWITCH_SPDT, SWITCH_SP3T,
     ]
 }
