@@ -781,16 +781,21 @@ def guess_type_id(ref: str, value: str, symbol: str, lib: str = '',
         return 'Arduino_Nano'
     if 'TEENSY' in v or 'TEENSY' in s:
         return 'Teensy_41'
-    # RPi Pico / full-size Pi: any board using the standard 40-pin GPIO header.
+    # Full-size Raspberry Pi (40-pin GPIO header, BCM numbering).
+    # Catches: Raspberry_Pi_4B, Raspberry_Pi_3B, Raspberry_Pi_Zero, etc.
+    # Must be checked before the Pico branch so that 'RASPBERRY_PI' in a
+    # full-size Pi symbol name doesn't fall through to the Pico type_id.
+    _rpi_hit = 'RASPBERRYPI' in v or 'RASPBERRYPI' in s or 'RASPBERRY_PI' in v or 'RASPBERRY_PI' in s
+    _pico_hit = ('PICO' in v or 'PICO' in s
+                 or 'RP2040' in v or 'RP2040' in s
+                 or 'RP2350' in v or 'RP2350' in s
+                 or 'RP2354' in v or 'RP2354' in s)
+    if _rpi_hit and not _pico_hit:
+        return 'Raspberry_Pi_4'
+    # RPi Pico / RP2040 / RP2350 variants.
     # Catches: RaspberryPi_Pico, RaspberryPi_Pico_W, RaspberryPi_Pico_Debug,
-    #          RaspberryPi_Pico_Extensive, RP2040, RP2350A/B, RP2354A/B,
-    #          Raspberry_Pi_4, Raspberry_Pi_3B, etc.
-    if ('PICO' in v or 'PICO' in s
-            or 'RP2040' in v or 'RP2040' in s
-            or 'RP2350' in v or 'RP2350' in s
-            or 'RP2354' in v or 'RP2354' in s
-            or 'RASPBERRYPI' in v or 'RASPBERRYPI' in s
-            or 'RASPBERRY_PI' in v or 'RASPBERRY_PI' in s):
+    #          RaspberryPi_Pico_Extensive, RP2040, RP2350A/B, RP2354A/B.
+    if _pico_hit or _rpi_hit:
         return 'RPi_Pico'
 
     # Exact value/symbol matches first

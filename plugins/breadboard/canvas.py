@@ -4588,7 +4588,7 @@ class BreadboardCanvas(wx.Panel):
         """
         result: Dict[Tuple[str, int], Tuple[int, int]] = {}
         if comp_def.type_id == 'RPi_Pico':
-            GAP = self._body_h(comp_def)   # 8px row gap
+            GAP = self._body_h(comp_def)
             rot = int(flipped) % 4
             P  = MODULE_PIN_PITCH
             for pin_num, offset in comp_def.pin_offsets.items():
