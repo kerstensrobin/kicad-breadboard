@@ -1,5 +1,10 @@
 # KiCad Breadboard Builder <img src="images/icon.png" height="45">
 
+[![Release](https://img.shields.io/github/v/release/kerstensrobin/kicad-breadboard)](https://github.com/kerstensrobin/kicad-breadboard/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/kerstensrobin/kicad-breadboard/total)](https://github.com/kerstensrobin/kicad-breadboard/releases)
+[![License](https://img.shields.io/github/license/kerstensrobin/kicad-breadboard)](LICENSE)
+[![Stars](https://img.shields.io/github/stars/kerstensrobin/kicad-breadboard)](https://github.com/kerstensrobin/kicad-breadboard/stargazers)
+
 A KiCad 9 / 10 plugin for introductory analog electronics courses at the University of Antwerp. Draw your schematic in Eeschema, then wire it up on a virtual breadboard, validate it against the schematic, and run simple SPICE checks from the breadboard view.
 
 Current release name: **Whole Wheat**.
