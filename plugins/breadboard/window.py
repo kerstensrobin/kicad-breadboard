@@ -40,7 +40,7 @@ from .model import (
     PROBE_NAMES, PROBE_META,
 )
 
-PLUGIN_VERSION = 'Whole Wheat'
+PLUGIN_VERSION = '1.1.0'
 REPO           = 'kerstensrobin/kicad-breadboard'
 
 # Toolbar button IDs
@@ -1464,9 +1464,13 @@ class BreadboardWindow(wx.Frame):
                 webbrowser.open(releases_url)
             return
 
-        # Versions go backwards through the alphabet (zwieback → zopf → … → aardvark)
-        # so a lower string value means a newer release.
-        if latest.lower().lstrip('v') >= PLUGIN_VERSION.lower():
+        def _ver(s):
+            try:
+                return tuple(int(x) for x in s.lower().lstrip('v').split('.'))
+            except ValueError:
+                return (0,)
+
+        if _ver(latest) <= _ver(PLUGIN_VERSION):
             wx.MessageBox(
                 f'You are running the latest version: {PLUGIN_VERSION}.',
                 'Check for updates', wx.OK | wx.ICON_INFORMATION, self,
