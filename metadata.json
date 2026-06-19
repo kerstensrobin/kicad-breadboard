@@ -1,0 +1,37 @@
+{
+  "$schema": "https://go.kicad.org/pcm/schemas/v1",
+  "identifier": "com.github.kerstensrobin.kicad-breadboard",
+  "name": "Breadboard Builder",
+  "description": "Place schematic components on a virtual breadboard and validate wiring against the KiCad netlist.",
+  "description_full": "A KiCad Action Plugin for introductory analog electronics courses.\n\nDraw your schematic in Eeschema, then wire up the same circuit on a virtual breadboard \u2014 placing components, drawing jumper wires, and validating your work against the schematic netlist in real time.\n\nFeatures:\n- Six configurable breadboard sizes (mini to triple)\n- Component tray: drag resistors, capacitors, diodes, LEDs, BJTs, JFETs, MOSFETs, op-amps, DIP ICs, Arduino, Raspberry Pi Pico, and more onto the board\n- Real-time validation against the KiCad netlist (open nets and shorts highlighted)\n- Bendable jumper wires with selectable or auto-cycled colours\n- Drawing annotations: lines, rectangles, circles, text, and text boxes\n- SPICE simulation from the breadboard view (DC operating point and KiScope transient)\n- Instrument probes: function generator, oscilloscope channels, PSU connections\n- Net highlighting from board holes or the net list overlay\n- Export to PNG or SVG\n- Save / load board sessions (.kicad_bbrd)\n- Configurable rails, binding-post placement, and baseboard branding",
+  "type": "plugin",
+  "author": {
+    "name": "Robin Kerstens",
+    "contact": {
+      "email": "info@nacho.works",
+      "web": "https://github.com/kerstensrobin/kicad-breadboard"
+    }
+  },
+  "maintainer": {
+    "name": "Robin Kerstens",
+    "contact": {
+      "email": "info@nacho.works",
+      "web": "https://github.com/kerstensrobin/kicad-breadboard"
+    }
+  },
+  "license": "GPL-3.0-or-later",
+  "resources": {
+    "homepage": "https://github.com/kerstensrobin/kicad-breadboard"
+  },
+  "versions": [
+    {
+      "version": "1.1.0",
+      "status": "stable",
+      "kicad_version": "9.0",
+      "download_url": "https://github.com/kerstensrobin/kicad-breadboard/releases/download/v1.1.0/kicad-breadboard-1.1.0.zip",
+      "download_sha256": "1e45dabbf5c19b441450854fe8877a2a7c579159bf9e3407980b3bafd7c0138e",
+      "download_size": 166692,
+      "install_size": 952770
+    }
+  ]
+}
