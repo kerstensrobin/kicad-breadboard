@@ -40,7 +40,7 @@ from .model import (
     PROBE_NAMES, PROBE_META,
 )
 
-PLUGIN_VERSION = '1.1.0'
+PLUGIN_VERSION = '1.1.1'
 REPO           = 'kerstensrobin/kicad-breadboard'
 
 # Toolbar button IDs
