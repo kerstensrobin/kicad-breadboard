@@ -41,7 +41,31 @@ cp -r plugins/breadboard "$TMPDIR/plugins/"
 find "$TMPDIR/plugins" -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
 find "$TMPDIR/plugins" -name '*.pyc' -delete 2>/dev/null || true
 
-cp metadata.json "$TMPDIR/"
+# The metadata.json bundled *inside* the package must describe only its own
+# version (PCM rejects a packaged copy with more than one version entry), and
+# must omit the hash/size fields (which describe the outer zip and would go
+# stale on every rebuild otherwise).
+python3 - <<EOF
+import json
+
+with open("metadata.json") as f:
+    m = json.load(f)
+
+for v in m["versions"]:
+    if v["version"] == "$VERSION":
+        pkg_version = v
+        break
+else:
+    raise SystemExit(f"Version $VERSION not found in metadata.json versions array")
+
+pkg_metadata = dict(m)
+pkg_metadata["versions"] = [{k: val for k, val in pkg_version.items()
+                             if k not in ("download_sha256", "download_size", "install_size")}]
+
+with open("$TMPDIR/metadata.json", "w") as f:
+    json.dump(pkg_metadata, f, indent=2)
+    f.write("\n")
+EOF
 
 # Build the ZIP with paths relative to TMPDIR root
 python3 -c "

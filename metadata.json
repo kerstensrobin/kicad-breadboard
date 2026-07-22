@@ -29,9 +29,9 @@
       "status": "stable",
       "kicad_version": "9.0",
       "download_url": "https://github.com/kerstensrobin/kicad-breadboard/releases/download/v1.1.1/kicad-breadboard-1.1.1.zip",
-      "download_sha256": "908fdff3d03b5a47c8298d16cb0bc724d5a312941ad9b054cdd11497db0a7733",
-      "download_size": 167197,
-      "install_size": 955088
+      "download_sha256": "b43e899a0774728ce84644ea00c0d0825e9270562f13e3791fd30c410f5de931",
+      "download_size": 167012,
+      "install_size": 954555
     },
     {
       "version": "1.1.0",
