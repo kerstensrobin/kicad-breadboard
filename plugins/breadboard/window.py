@@ -275,6 +275,7 @@ class BreadboardWindow(wx.Frame):
         self._project_path: Optional[str] = project_path
         self._netlist_path: Optional[str] = None   # last successfully loaded .net file
         self._refreshing_choices: bool = False     # suppress EVT_CHOICE during SetItems
+        self._validation_active: bool = False      # True once Validate has been run and not yet cleared
         self._sim_pane: Optional['SimPane'] = None
         self._waveform_frame: Optional['WaveformFrame'] = None
 
@@ -588,11 +589,12 @@ class BreadboardWindow(wx.Frame):
         self.tray.on_pick = lambda comp_def, ref: self.canvas.begin_place(comp_def, ref)
         self.tray.on_rpi_label_mode = lambda v: self.canvas.set_rpi_long_labels(v)
         self.tray.on_color_changed = lambda: self.canvas.Refresh()
-        self.canvas.on_placed = lambda ref: self.tray.refresh_placed()
+        self.canvas.on_placed = self._on_canvas_placed
         self.canvas.on_probe_placed = self._on_probe_placed
         self.canvas.on_history_change = self._on_history_change
         self.canvas.on_restore = self._on_restore
         self.canvas.on_terminal_right_click = self._on_terminal_right_click
+        self.canvas.on_board_changed = self._revalidate_live
 
         self.SetStatusBar(wx.StatusBar(self))
         self.GetStatusBar().SetFieldsCount(2)
@@ -953,6 +955,25 @@ class BreadboardWindow(wx.Frame):
         self._refresh_probe_buttons()
         self._refresh_terminal_choices()
         self._refresh_probe_choices()
+        self._revalidate_live()
+
+    def _on_canvas_placed(self, ref: str) -> None:
+        self.tray.refresh_placed()
+        self._revalidate_live()
+
+    def _revalidate_live(self) -> None:
+        """Keep displayed validation markers in sync with the board after an edit.
+
+        Only acts once the user has explicitly run Validate — otherwise a half-built
+        circuit would light up with OPEN_NET markers before the user asked to check.
+        """
+        if not self._validation_active or self.netlist is None:
+            return
+        result = validate(self.board, self.netlist)
+        if result.ok:
+            self.canvas.clear_highlights()
+        else:
+            self.canvas.set_validation_result(result)
 
     def _on_char_hook(self, evt: wx.KeyEvent) -> None:
         if _focus_is_text_entry():
@@ -1015,6 +1036,7 @@ class BreadboardWindow(wx.Frame):
             self.canvas.reload_board(self.board)
             self.tray.board = self.board
             self.tray.refresh_placed()
+            self._validation_active = False
             self.canvas.clear_highlights()
 
         self._project_path = str(Path(path).parent)
@@ -1125,6 +1147,7 @@ class BreadboardWindow(wx.Frame):
                 msgs.append(f'type changed — re-place: {", ".join(type_changed)}')
             if msgs:
                 self.tray.refresh_placed()
+                self._revalidate_live()
                 self.canvas.Refresh()
                 self.SetStatusText(f'Netlist updated. {"; ".join(msgs).capitalize()}.', 0)
 
@@ -1206,6 +1229,7 @@ class BreadboardWindow(wx.Frame):
         self.board = result['board']
         self.canvas.reload_board(self.board)
         self.tray.board = self.board
+        self._validation_active = False
         self.canvas.clear_highlights()
         # Restore annotations
         ann_raw = result.get('annotations', [])
@@ -1507,6 +1531,7 @@ class BreadboardWindow(wx.Frame):
             self.SetStatusText('No netlist loaded.', 0)
             return
 
+        self._validation_active = True
         result = validate(self.board, self.netlist)
 
         if result.ok:
@@ -1527,6 +1552,7 @@ class BreadboardWindow(wx.Frame):
         self.canvas.set_rpi_long_labels(on)
 
     def _on_clear_warnings(self, _evt) -> None:
+        self._validation_active = False
         self.canvas.clear_highlights()
         self.SetStatusText('Validation markers cleared.', 0)
 
@@ -1812,6 +1838,7 @@ class BreadboardWindow(wx.Frame):
             self._refresh_terminal_choices()
             self._refresh_probe_choices()
             self._refresh_probe_buttons()
+            self._validation_active = False
             self.canvas.clear_highlights()
             if self._sim_pane:
                 self._sim_pane.refresh_sources(self.board)
@@ -1849,6 +1876,7 @@ class BreadboardWindow(wx.Frame):
         self.board.assign_terminal(term_name, net)
         if self._sim_pane:
             self._sim_pane.refresh_sources(self.board)
+        self._revalidate_live()
         self.canvas.Refresh()
 
     def _refresh_terminal_choices(self) -> None:
@@ -1907,6 +1935,7 @@ class BreadboardWindow(wx.Frame):
         self._refresh_terminal_choices()
         if self._sim_pane:
             self._sim_pane.refresh_sources(self.board)
+        self._revalidate_live()
         self.canvas.Refresh()
 
     # ------------------------------------------------------------------
@@ -1941,6 +1970,7 @@ class BreadboardWindow(wx.Frame):
         self._refresh_probe_choices()
         if self._sim_pane:
             self._sim_pane.refresh_probes(self.board)
+        self._revalidate_live()
         if name.startswith('CH') and self._waveform_frame and self._waveform_frame.IsShown():
             self._refresh_waveform_probe_markers()
         else:
@@ -1956,6 +1986,7 @@ class BreadboardWindow(wx.Frame):
         self._refresh_probe_warnings()
         if self._sim_pane:
             self._sim_pane.refresh_probes(self.board)
+        self._revalidate_live()
         self.canvas.Refresh()
 
     def _on_probe_place_btn(self, probe_name: str) -> None:
@@ -1965,6 +1996,7 @@ class BreadboardWindow(wx.Frame):
             self._refresh_probe_buttons()
             if self._sim_pane:
                 self._sim_pane.refresh_probes(self.board)
+            self._revalidate_live()
             self.canvas.Refresh()
         else:
             # Start placement mode
