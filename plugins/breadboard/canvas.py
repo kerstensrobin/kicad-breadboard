@@ -998,8 +998,7 @@ class BreadboardCanvas(wx.Panel):
         self._pin_drag_num:  Optional[int]  = None   # which pin number is being dragged
         self._pin_drag_hole: Optional[Hole] = None   # current snap target for that pin
 
-        self._highlighted_holes: Set[Hole] = set()   # from validation
-        self._highlight_kind: Optional[IssueKind] = None
+        self._highlighted_holes: Dict[Hole, IssueKind] = {}   # from validation, per-hole issue kind
         self._net_hl_holes: Set[Hole] = set()        # from net-highlight / net-probe mode
         self._net_hl_name:  str       = ''           # net name currently highlighted
         self._net_probe_cb: Optional[callable] = None  # callback for MODE_NET_PROBE
@@ -1049,6 +1048,7 @@ class BreadboardCanvas(wx.Panel):
         self.on_history_change: Optional[callable] = None  # called(can_undo, can_redo)
         self.on_restore: Optional[callable] = None  # called after undo/redo for full UI refresh
         self.on_terminal_right_click: Optional[callable] = None  # called(term_name, screen_pos)
+        self.on_board_changed: Optional[callable] = None  # called after any edit affecting connectivity
 
         # Simulation overlay
         self._sim_result = None   # SimResult or None
@@ -1367,6 +1367,7 @@ class BreadboardCanvas(wx.Panel):
             self.push_undo()
             self.board.remove_wire(self._selected_wire)
             self._selected_wire = None
+            self._notify_board_changed()
             self.Refresh()
         elif self._selected_ref is not None:
             self.push_undo()
@@ -1510,22 +1511,25 @@ class BreadboardCanvas(wx.Panel):
         return ''
 
     def set_highlighted(self, holes: Set[Hole], kind: Optional[IssueKind] = None) -> None:
-        self._highlighted_holes = holes
-        self._highlight_kind = kind
+        self._highlighted_holes = {h: kind for h in holes}
         self.Refresh()
 
     def clear_highlights(self) -> None:
-        self._highlighted_holes = set()
-        self._highlight_kind = None
+        self._highlighted_holes = {}
         self._validation_icons.clear()
         self._sim_result = None
         self.Refresh()
 
+    def _notify_board_changed(self) -> None:
+        """Tell the owning window connectivity may have changed, so it can re-validate
+        and keep any displayed validation markers from going stale."""
+        if self.on_board_changed:
+            self.on_board_changed()
+
     def set_validation_result(self, result) -> None:
         """Store validation issues; position icons at the relevant component."""
-        all_holes: Set[Hole] = set()
+        hole_kind: Dict[Hole, IssueKind] = {}
         self._validation_icons.clear()
-        hole_set = set()
         for issue in result.issues:
             if not issue.holes:
                 continue
@@ -1551,9 +1555,9 @@ class BreadboardCanvas(wx.Panel):
             if icon_xy:
                 # Offset upward so the badge doesn't cover the hole dot
                 self._validation_icons.append((icon_xy[0], icon_xy[1] - 14, issue.kind))
-            all_holes.update(issue.holes)
-        self._highlighted_holes = all_holes
-        self._highlight_kind = result.issues[0].kind if result.issues else None
+            for hole in issue.holes:
+                hole_kind.setdefault(hole, issue.kind)
+        self._highlighted_holes = hole_kind
         self.Refresh()
 
     def set_simulation_result(self, result) -> None:
@@ -1688,6 +1692,7 @@ class BreadboardCanvas(wx.Panel):
                         self.push_undo()
                         self.board.add_wire(self._wire_start, hole,
                                             color=self.next_wire_color())
+                        self._notify_board_changed()
                     self._wire_start = None
                     self.Refresh()
             return
@@ -2095,6 +2100,7 @@ class BreadboardCanvas(wx.Panel):
                         self._undo_stack.pop(0)
                     self._redo_stack.clear()
                     self._notify_history()
+                self._notify_board_changed()
             self._wire_end_drag_wire = None
             self._wire_end_drag_which = None
             self._wire_end_drag_hole = None
@@ -2114,6 +2120,7 @@ class BreadboardCanvas(wx.Panel):
                         self._undo_stack.pop(0)
                     self._redo_stack.clear()
                     self._notify_history()
+                    self._notify_board_changed()
                 self._wire_bend_pre_snap = None
             self.Refresh()
             return
@@ -2194,6 +2201,7 @@ class BreadboardCanvas(wx.Panel):
                         self._undo_stack.pop(0)
                     self._redo_stack.clear()
                     self._notify_history()
+                    self._notify_board_changed()
                 self._drag_pre_snap = None
             self._drag_comp = None
             self.Refresh()
@@ -2423,6 +2431,7 @@ class BreadboardCanvas(wx.Panel):
         if comp_def.is_module:
             placed.flipped = (placed.flipped + 1) % 4
             self._sync_module_pins(ref)
+            self._notify_board_changed()
             self.Refresh()
             return
 
@@ -2450,6 +2459,7 @@ class BreadboardCanvas(wx.Panel):
         try:
             placed.pin_holes = comp_def.place(new_anchor, flipped=new_flipped)
             placed.flipped = new_flipped
+            self._notify_board_changed()
         except (AssertionError, IndexError, KeyError):
             pass
         self.Refresh()
@@ -3016,7 +3026,7 @@ class BreadboardCanvas(wx.Panel):
             dc.DrawCircle(cx, cy, HOLE_R + 4)
         # Validation ring
         if hole in self._highlighted_holes:
-            color = '#ff4444' if self._highlight_kind == IssueKind.SHORT else '#ffaa00'
+            color = '#ff4444' if self._highlighted_holes[hole] == IssueKind.SHORT else '#ffaa00'
             dc.SetBrush(wx.Brush(color))
             dc.SetPen(wx.Pen(color, 1))
             dc.DrawCircle(cx, cy, HOLE_R + 2)
