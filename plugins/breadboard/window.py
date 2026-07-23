@@ -40,7 +40,7 @@ from .model import (
     PROBE_NAMES, PROBE_META,
 )
 
-PLUGIN_VERSION = '1.1.1'
+PLUGIN_VERSION = '1.1.2'
 REPO           = 'kerstensrobin/kicad-breadboard'
 
 # Toolbar button IDs
@@ -85,8 +85,6 @@ ID_DRAW_TEXTBOX  = wx.NewIdRef()
 _WIRE_COLOR_NAMES = ['Yellow', 'Red', 'Blue', 'Green', 'Orange', 'Purple', 'Cyan', 'Grey', 'Black']
 _WIRE_COLOR_LABELS = ['Auto'] + _WIRE_COLOR_NAMES
 
-_ICONS_IMAGES_DIR = Path(__file__).resolve().parent.parent.parent / 'kicad_icons' / 'images'
-_REPO_IMAGES_DIR = Path(__file__).resolve().parent.parent.parent / 'images'
 _icon_cache: dict = {}
 
 
@@ -123,18 +121,17 @@ def _panel_bg() -> wx.Colour:
 
 
 def _local_icon(name: str, size: int = 24, scale: float = 1.0) -> 'wx.Bitmap':
-    """Load a repo/local PNG and scale to size×size."""
-    for path in (_REPO_IMAGES_DIR / name, _ICONS_IMAGES_DIR / name):
-        try:
-            if not path.exists():
-                continue
-            img = wx.Image(str(path), wx.BITMAP_TYPE_PNG)
-            if img.GetWidth() != size or img.GetHeight() != size:
-                img.Rescale(size, size, wx.IMAGE_QUALITY_HIGH)
-            return wx.Bitmap(img)
-        except Exception:
-            continue
-    return wx.NullBitmap
+    """Load a bundled PNG from the plugin's own resources/ folder and scale to size×size."""
+    path = _RESOURCES / name
+    try:
+        if not path.exists():
+            return wx.NullBitmap
+        img = wx.Image(str(path), wx.BITMAP_TYPE_PNG)
+        if img.GetWidth() != size or img.GetHeight() != size:
+            img.Rescale(size, size, wx.IMAGE_QUALITY_HIGH)
+        return wx.Bitmap(img)
+    except Exception:
+        return wx.NullBitmap
 
 
 def _kicad_icon_archives() -> list[Path]:
@@ -152,6 +149,7 @@ def _kicad_icon_archives() -> list[Path]:
         '/usr/share/kicad/resources',
         '/usr/local/share/kicad/resources',
         '/opt/kicad/share/kicad/resources',
+        '/app/share/kicad/resources',  # Flatpak (org.kicad.KiCad): sandbox uses /app, not /usr
         '/Applications/KiCad/KiCad.app/Contents/SharedSupport/resources',
         '/Applications/KiCad/KiCad.app/Contents/SharedSupport/kicad/resources',
         '/Applications/KiCad/KiCad.app/Contents/SharedSupport/share/kicad/resources',

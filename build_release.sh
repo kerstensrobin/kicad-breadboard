@@ -36,8 +36,10 @@ else
     echo "Warning: no SVG renderer found; icon copied as-is (should be 64x64)"
 fi
 
-# Copy plugin tree, stripping dev/cache artefacts
-cp -r plugins/breadboard "$TMPDIR/plugins/"
+# Copy plugin tree, stripping dev/cache artefacts. PCM requires __init__.py to
+# sit directly inside the package's plugins/ dir, not a second level down, so
+# we flatten breadboard/'s contents up rather than copying the folder itself.
+cp -r plugins/breadboard/. "$TMPDIR/plugins/"
 find "$TMPDIR/plugins" -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
 find "$TMPDIR/plugins" -name '*.pyc' -delete 2>/dev/null || true
 
