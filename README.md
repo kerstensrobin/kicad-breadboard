@@ -11,7 +11,7 @@ A KiCad 9 / 10 plugin for introductory analog electronics courses at the Univers
 
 
 
-## Whole Wheat highlights
+## v1.1 highlights
 
 - Graphical overhaul with refreshed toolbar/menu icons, improved component rendering, and clearer side panels
 - Drawing annotations: add lines, rectangles, circles, text, and text boxes directly on the breadboard
