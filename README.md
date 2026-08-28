@@ -32,6 +32,7 @@ A KiCad 9 / 10 plugin for introductory analog electronics courses at the Univers
 
 > Built on [CachyOS](https://cachyos.org) — tested on CachyOS, Ubuntu, and Windows.
 
+Note: This tool can also be downloaded using KiCad's built-in [Plugin and Content Manager](https://docs.kicad.org/10.0/en/kicad/kicad.html#plugin-content-manager). For a manual install of the latest GitHub version, follow the steps below:
 **1. Clone the repository**
 ```bash
 git clone https://github.com/kerstensrobin/kicad-breadboard.git
