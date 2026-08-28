@@ -364,7 +364,13 @@ class BreadboardWindow(wx.Frame):
         main_panel.SetSizer(outer_sizer)
 
         # --- Right panel: binding posts, instruments, hotkeys ---
-        tray_panel = wx.Panel(inner_splitter)
+        # A ScrolledWindow rather than a plain Panel: on a short window (small
+        # screen, or the sidebar shown alongside a tall canvas) this sidebar's
+        # content — binding posts, instruments, hotkey reference, credits —
+        # can be taller than the available height. A plain Panel would just
+        # clip whatever doesn't fit (the credits line at the very bottom);
+        # this scrolls instead.
+        tray_panel = wx.ScrolledWindow(inner_splitter, style=wx.VSCROLL)
         tray_panel.SetBackgroundColour(_panel_bg())
         tray_sizer = wx.BoxSizer(wx.VERTICAL)
 
@@ -581,6 +587,8 @@ class BreadboardWindow(wx.Frame):
         tray_outer.Add(_right_sep, 0, wx.EXPAND)
         tray_outer.Add(tray_sizer, 1, wx.EXPAND)
         tray_panel.SetSizer(tray_outer)
+        tray_panel.SetScrollRate(0, 12)
+        tray_panel.FitInside()
 
         inner_splitter.SplitVertically(canvas_area, tray_panel, sashPosition=-260)
         inner_splitter.SetMinimumPaneSize(150)
@@ -1263,6 +1271,7 @@ class BreadboardWindow(wx.Frame):
             self.canvas.show_binding_posts = p.show_binding_posts
             self._tray_sizer.Show(self._binding_panel, p.show_binding_posts)
             self._tray_panel.Layout()
+            self._tray_panel.FitInside()
 
         # Number of terminals
         if p.num_terminals != old.num_terminals:
@@ -1271,17 +1280,20 @@ class BreadboardWindow(wx.Frame):
                                               p.num_terminals)
             self._refresh_terminal_rows(p.num_terminals)
             self._tray_panel.Layout()
+            self._tray_panel.FitInside()
 
         # Instruments panel visibility
         if p.instruments_enabled != old.instruments_enabled:
             self._tray_sizer.Show(self._instr_panel, p.instruments_enabled)
             self._tray_panel.Layout()
+            self._tray_panel.FitInside()
 
         # Hotkeys panel visibility
         if p.show_hotkeys != old.show_hotkeys:
             self._tray_sizer.Show(self._hotkey_line,  p.show_hotkeys)
             self._tray_sizer.Show(self._hotkey_sizer, p.show_hotkeys)
             self._tray_panel.Layout()
+            self._tray_panel.FitInside()
 
         # Oscilloscope channel count
         if p.scope_channels != old.scope_channels:
@@ -1383,6 +1395,7 @@ class BreadboardWindow(wx.Frame):
         self._tray_sizer.Show(self._hotkey_sizer,  p.show_hotkeys)
         self._refresh_terminal_rows(p.num_terminals)
         self._tray_panel.Layout()
+        self._tray_panel.FitInside()
 
     def _refresh_terminal_rows(self, num_terminals: int) -> None:
         """Show/hide terminal rows in the binding panel based on num_terminals."""

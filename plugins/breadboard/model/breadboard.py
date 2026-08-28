@@ -54,11 +54,16 @@ VERT_RAIL_LEN_PER_SECTION = 20                  # holes per section on vertical 
 SUNNY11_UPPER_COLS = 28      # rows 1-28 on the real board, rendered as "columns" here
 SUNNY11_UPPER_RAIL_LEN = 10  # one hole per row-letter (a-j); V1/V2 rail runs perpendicular
                              # to the tie columns, so its length matches ALL_ROWS, not COLS
-SUNNY11_LOWER_COLS = 30
-SUNNY11_LOWER_HALF = 15      # V3 covers cols 1-15, V4 covers cols 16-30
-SUNNY11_LOWER_RAIL_LEN = 13  # holes per V3/V4 rail half — fewer than the 15 tie
-                             # columns they sit above, grouped in 5s like every
-                             # other rail in the app (see CanvasLayout.rail_x)
+SUNNY11_LOWER_COLS = 22      # fewer than the real board's 30 — at the shared PITCH
+                             # this keeps the lower block's width close to the
+                             # upper pair's rather than stretching either one's
+                             # hole spacing out of proportion to line them up
+SUNNY11_LOWER_HALF = 11      # V3 covers cols 1-11, V4 covers cols 12-22
+SUNNY11_LOWER_RAIL_LEN = 10  # holes per V3/V4 rail half (cols 1-10 / 13-22) —
+                             # one un-split cluster each, leaving the two
+                             # columns straddling the V3/V4 boundary (11, 12)
+                             # empty so the visible break lines up with the
+                             # groove between the V1/V2 blocks above
 SUNNY11_LOWER_ROWS = ('a', 'b', 'c', 'd', 'e', 'f')   # single ungapped 6-row bank
 SUNNY11_PLUS_RAIL_NAMES = ('top_plus', 'lower_plus_left', 'lower_plus_right')
 SUNNY11_SHARED_MINUS_NAMES = ('sunny_top_minus', 'sunny_bot_minus')
