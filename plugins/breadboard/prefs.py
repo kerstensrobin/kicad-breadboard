@@ -33,7 +33,8 @@ class Preferences:
     show_binding_posts: bool = True    # draw binding-post terminals on the board
     num_terminals: int = 3             # number of binding-post terminals shown (2, 3, or 4)
     export_format: str = 'png'         # 'png' or 'svg'
-    board_layout: str = 'full'         # 'mini', 'half', 'full', 'double', 'triple'
+    board_layout: str = 'full'         # 'mini', 'half', 'full', 'double', 'triple',
+                                        # 'double_rails', 'sunny-11'
     binding_post_side: str = 'left'    # 'left', 'right', 'top', 'bottom'
     show_baseboard: bool = True        # draw a baseboard behind the breadboard(s)
     baseboard_color: str = '#3d6fa8'   # baseboard fill colour

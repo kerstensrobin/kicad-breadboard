@@ -7,6 +7,10 @@ Supports five layouts:
   'double'       — two full boards stacked (sections 0 and 1)
   'triple'       — three full boards stacked (sections 0–2) + shared left vertical power rails
   'double_rails' — two full boards stacked + shared left AND right vertical power rails
+  'sunny-11'     — dual-rail portrait style: two portrait tie-blocks side by side
+                   (sections 0/1, each with its own V1/V2 plus rail) over one
+                   landscape tie-block (section 2, ungapped, with its own V3/V4
+                   plus rails); both rail pairs share one continuous minus rail
 
 Each section has:
 - Tie strip area: columns × 10 rows (a–j)
@@ -42,10 +46,28 @@ VERT_RAIL_NAMES = ('vert_plus', 'vert_minus')                       # left vert 
 VERT_RAIL_NAMES_RIGHT = ('vert_right_plus', 'vert_right_minus')    # right vert rails (double_rails only)
 VERT_RAIL_LEN = 60                              # holes per vertical rail for triple (20 per section)
 VERT_RAIL_LEN_PER_SECTION = 20                  # holes per section on vertical rails
-ALL_RAIL_NAMES = RAIL_NAMES + VERT_RAIL_NAMES + VERT_RAIL_NAMES_RIGHT
+
+# sunny-11 layout: upper blocks (sections 0/1) are portrait tie-strips with their
+# own independent V1/V2 plus rail each; lower block (section 2) is a landscape,
+# ungapped tie-strip with independent V3/V4 plus rails. Both rail pairs share one
+# continuous minus rail (never split), unlike every other layout's rail_split.
+SUNNY11_UPPER_COLS = 28      # rows 1-28 on the real board, rendered as "columns" here
+SUNNY11_UPPER_RAIL_LEN = 10  # one hole per row-letter (a-j); V1/V2 rail runs perpendicular
+                             # to the tie columns, so its length matches ALL_ROWS, not COLS
+SUNNY11_LOWER_COLS = 30
+SUNNY11_LOWER_HALF = 15      # V3 covers cols 1-15, V4 covers cols 16-30
+SUNNY11_LOWER_RAIL_LEN = 13  # holes per V3/V4 rail half — fewer than the 15 tie
+                             # columns they sit above, grouped in 5s like every
+                             # other rail in the app (see CanvasLayout.rail_x)
+SUNNY11_LOWER_ROWS = ('a', 'b', 'c', 'd', 'e', 'f')   # single ungapped 6-row bank
+SUNNY11_PLUS_RAIL_NAMES = ('top_plus', 'lower_plus_left', 'lower_plus_right')
+SUNNY11_SHARED_MINUS_NAMES = ('sunny_top_minus', 'sunny_bot_minus')
+
+ALL_RAIL_NAMES = (RAIL_NAMES + VERT_RAIL_NAMES + VERT_RAIL_NAMES_RIGHT
+                   + ('lower_plus_left', 'lower_plus_right') + SUNNY11_SHARED_MINUS_NAMES)
 RAIL_LEN = 50       # holes per rail: 25 left + 25 right (10 groups of 5)
 RAIL_SPLIT = 25     # rails are split into two electrically separate halves here
-TERMINAL_NAMES = ('GND', 'V1', 'V2', 'V3')
+TERMINAL_NAMES = ('GND', 'V1', 'V2', 'V3', 'V4')
 
 # Derived per-layout constants
 _LAYOUT_PARAMS: Dict[str, Tuple[int, int]] = {
@@ -55,6 +77,10 @@ _LAYOUT_PARAMS: Dict[str, Tuple[int, int]] = {
     'double':       (COLUMNS,      2),
     'triple':       (COLUMNS,      3),
     'double_rails': (COLUMNS,      2),
+    # sunny-11's geometry is bespoke (see Breadboard._build_static_sunny11 and
+    # CanvasLayout) — columns/sections here are bookkeeping only, not used to
+    # drive the standard per-section loops.
+    'sunny-11':     (SUNNY11_UPPER_COLS, 3),
 }
 # Layouts that have no power rails
 RAILLESS_LAYOUTS = frozenset({'mini'})
@@ -218,6 +244,10 @@ class Breadboard:
     # ------------------------------------------------------------------
 
     def _build_static(self):
+        if self.layout == 'sunny-11':
+            yield from self._build_static_sunny11()
+            return
+
         # Tie strips: connect each hole to its neighbour in the same bank, per section
         for section in range(self.sections):
             for col in range(1, self.columns + 1):
@@ -245,6 +275,37 @@ class Breadboard:
                 for rail in VERT_RAIL_NAMES_RIGHT:
                     for i in range(1, vert_len):
                         yield RailHole(rail, i), RailHole(rail, i + 1)
+
+    def _build_static_sunny11(self):
+        """sunny-11 topology (see module docstring). rail_split is intentionally
+        ignored here: the asymmetric split (plus always split, minus never split)
+        is a fixed physical trait of this board, not a user preference."""
+        # Upper portrait blocks: sections 0 (V1 side) and 1 (V2 side), standard
+        # gapped 5+5 tie strips, each with its own independent top_plus rail.
+        for section in (0, 1):
+            for col in range(1, SUNNY11_UPPER_COLS + 1):
+                for rows in (TOP_ROWS, BOT_ROWS):
+                    for i in range(len(rows) - 1):
+                        yield TieHole(col, rows[i], section), TieHole(col, rows[i + 1], section)
+            for i in range(1, SUNNY11_UPPER_RAIL_LEN):
+                yield RailHole('top_plus', i, section), RailHole('top_plus', i + 1, section)
+
+        # Lower landscape block: section 2, single ungapped 6-row bank.
+        for col in range(1, SUNNY11_LOWER_COLS + 1):
+            rows = SUNNY11_LOWER_ROWS
+            for i in range(len(rows) - 1):
+                yield TieHole(col, rows[i], 2), TieHole(col, rows[i + 1], 2)
+
+        # V3/V4: two independent plus rails, each covering half the lower block.
+        for name in ('lower_plus_left', 'lower_plus_right'):
+            for i in range(1, SUNNY11_LOWER_RAIL_LEN):
+                yield RailHole(name, i, 2), RailHole(name, i + 1, 2)
+
+        # Shared minus rails: one continuous net under V1+V2, one under V3+V4.
+        for i in range(1, 2 * SUNNY11_UPPER_RAIL_LEN):
+            yield RailHole('sunny_top_minus', i), RailHole('sunny_top_minus', i + 1)
+        for i in range(1, 2 * SUNNY11_LOWER_RAIL_LEN):
+            yield RailHole('sunny_bot_minus', i), RailHole('sunny_bot_minus', i + 1)
 
     def set_rail_split(self, value: bool) -> None:
         """Toggle the mid-rail electrical disconnect and rebuild the static topology."""

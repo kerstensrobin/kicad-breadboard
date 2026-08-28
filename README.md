@@ -81,7 +81,7 @@ Use **Simulate** for DC operating point analysis, or open **KiScope** for transi
 
 ## Features
 
-- Renders a breadboard in six configurable sizes: mini (170 holes), half (400), full (830), double (2× full stacked), triple (3× full with vertical power rails), or double rails (2× full with vertical power rails on both sides)
+- Renders a breadboard in seven configurable sizes: mini (170 holes), half (400), full (830), double (2× full stacked), triple (3× full with vertical power rails), double rails (2× full with vertical power rails on both sides), or Sunny-11 (two portrait tie-blocks side by side over a landscape tie-block, with independent V1–V4 supply rails and 5 binding posts)
 - Parses a KiCad netlist and shows all placeable components in a side tray — **any U-prefix IC with an even pin count is supported automatically**, even if it is not in the built-in list (555 timers, 74xx logic gates, CD4xxx, counters, shift registers, …)
 - Two-step placement for 2-pin components: click pin 1, then click pin 2; diagonal placement and power-rail connections are preserved when the component is moved later
 - Single-click placement for DIP ICs and 3-pin components (BJT, POT); DIP bodies show the reference and value (e.g. U1 / RC4558) for quick identification
@@ -245,7 +245,7 @@ Open **File → Preferences…** to configure the plugin. Settings take effect i
 
 | Setting | Description |
 |---|---|
-| Size / layout | `Mini` (170 holes, no rails) · `Half` (400 holes) · `Full` (830 holes) · `Double` (2× full stacked) · `Triple` (3× full + vertical rails) · `Double Rails` (2× full + side rails) |
+| Size / layout | `Mini` (170 holes, no rails) · `Half` (400 holes) · `Full` (830 holes) · `Double` (2× full stacked) · `Triple` (3× full + vertical rails) · `Double Rails` (2× full + side rails) · `Sunny-11` (dual-rail portrait style, fixed 5 binding posts) |
 | Split power rails | Electrically disconnect each power rail in the middle |
 | Binding posts side | Position of the binding posts: `Left`, `Right`, top left/centre/right, or bottom left/centre/right |
 | Number of binding posts | Show 2, 3, or 4 posts, where the layout has room |
