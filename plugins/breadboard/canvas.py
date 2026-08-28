@@ -77,6 +77,8 @@ from .model import (
     COLUMNS, HALF_COLUMNS, MINI_COLUMNS, TOP_ROWS, BOT_ROWS, ALL_ROWS,
     RAIL_NAMES, VERT_RAIL_NAMES, RAIL_LEN, VERT_RAIL_LEN_PER_SECTION, RAIL_SPLIT, TERMINAL_NAMES,
     RAILLESS_LAYOUTS,
+    SUNNY11_UPPER_COLS, SUNNY11_UPPER_RAIL_LEN, SUNNY11_LOWER_COLS, SUNNY11_LOWER_HALF,
+    SUNNY11_LOWER_RAIL_LEN, SUNNY11_LOWER_ROWS,
     PROBE_NAMES, PROBE_META,
     ComponentDef, ALL_DEFS,
     Netlist, guess_type_id,
@@ -129,6 +131,13 @@ _MODULE_BODY_H: Dict[str, int] = {
     'Raspberry_Pi_4':   PITCH,  # rows one grid-step apart — aligns to hole grid in any rotation
 }
 
+# sunny-11: the two upper tie-blocks are rendered transposed relative to every
+# other layout (columns run vertically, bank-rows run horizontally) and sit
+# side by side, portrait-oriented.
+SUNNY11_GAP = CENTER_GAP        # horizontal gap between the a-e/f-j banks
+SUNNY11_BLOCK_GAP_X = 40        # gap between the V1 and V2 portrait blocks
+SUNNY11_BLOCK_GAP_Y = 50        # gap between the upper blocks and the lower block
+
 # Binding posts (circular)
 TERM_R = 30         # radius of binding-post circle
 TERM_CX = TERM_R + 8   # x-centre of all binding posts (from canvas left edge)
@@ -137,6 +146,7 @@ TERM_COLORS = {
     'V1':  ('#bb2020', '#ee7070'),
     'V2':  ('#1a7a30', '#55bb66'),
     'V3':  ('#1a5a8a', '#4499cc'),
+    'V4':  ('#7a3a9a', '#b070d0'),
 }
 
 WIRE_COLORS = [
@@ -346,6 +356,9 @@ class CanvasLayout:
         self.board_layout      = board_layout
         self.binding_post_side = binding_post_side
         self.rail_split        = rail_split
+        if board_layout == 'sunny-11':
+            self._init_sunny11()
+            return
         _col_map = {'mini': MINI_COLUMNS, 'half': HALF_COLUMNS}
         self.columns  = _col_map.get(board_layout, COLUMNS)
         self.sections = {'half': 1, 'full': 1, 'double': 2, 'triple': 3, 'double_rails': 2}.get(board_layout, 1)
@@ -559,6 +572,232 @@ class CanvasLayout:
             self.branding_rotated = False
 
     # ------------------------------------------------------------------
+    # sunny-11: bespoke geometry (transposed portrait blocks + a landscape block)
+    # ------------------------------------------------------------------
+
+    def _init_sunny11(self) -> None:
+        self.columns = SUNNY11_UPPER_COLS
+        self.sections = 3
+        self.has_rails = True
+        self.rail_len = 0
+        self._vert_rail_cx: Dict[str, int] = {}
+        self._vert_hole_y: List[int] = []
+        self.branding_rect: Optional[wx.Rect] = None
+        self.branding_rotated = False
+        self._module_pin_xy: Dict[Tuple[str, int], Tuple[int, int]] = {}
+
+        # --- Portrait blocks: row-letter axis -> x, column-number axis -> y ---
+        bank_w = (len(TOP_ROWS) - 1) * PITCH
+        self._s11_row_x: Dict[str, int] = {}
+        for i, row in enumerate(TOP_ROWS):
+            self._s11_row_x[row] = i * PITCH
+        for i, row in enumerate(BOT_ROWS):
+            self._s11_row_x[row] = bank_w + SUNNY11_GAP + i * PITCH
+        block_w = bank_w + SUNNY11_GAP + bank_w
+
+        post_area_h = TERM_R * 2 + MARGIN * 2
+        minus_y = post_area_h + MARGIN // 2
+        plus_y  = minus_y + RAIL_H + 2
+        tie_top_y = plus_y + RAIL_H + RAIL_GAP
+        self._s11_col_y: Dict[int, int] = {
+            col: tie_top_y + (col - 1) * PITCH for col in range(1, SUNNY11_UPPER_COLS + 1)
+        }
+        self._s11_plus_y  = plus_y
+        self._s11_minus_y = minus_y
+        self._s11_block_w = block_w
+        self._s11_block_top = minus_y - RAIL_H
+        upper_block_bottom = self._s11_col_y[SUNNY11_UPPER_COLS] + MARGIN // 2
+        self._s11_block_bottom = upper_block_bottom
+
+        # The lower block (30 columns) is inherently wider than the two
+        # portrait blocks combined, so it anchors at the left margin and the
+        # upper pair is shifted right to share its centre — not the other way
+        # round, which would push the wider block off-canvas to the left.
+        lower_w = (SUNNY11_LOWER_COLS - 1) * PITCH
+        lower_left = MARGIN
+        lower_center = lower_left + lower_w // 2
+        block0_left = max(MARGIN, lower_center - (block_w + SUNNY11_BLOCK_GAP_X // 2))
+        self._s11_block_left: Dict[int, int] = {
+            0: block0_left,
+            1: block0_left + block_w + SUNNY11_BLOCK_GAP_X,
+        }
+        _row_order = list(ALL_ROWS)   # matches SUNNY11_UPPER_RAIL_LEN order
+        self._s11_plus_rail_x: Dict[int, List[int]] = {
+            section: [left + self._s11_row_x[r] for r in _row_order]
+            for section, left in self._s11_block_left.items()
+        }
+        self._s11_minus_top_x: List[int] = self._s11_plus_rail_x[0] + self._s11_plus_rail_x[1]
+
+        upper_total_w = self._s11_block_left[1] + block_w + MARGIN
+
+        # --- Landscape lower block: standard orientation ---
+        lower_top     = upper_block_bottom + SUNNY11_BLOCK_GAP_Y
+        lower_minus_y = lower_top
+        lower_plus_y  = lower_minus_y + RAIL_H + 2
+        lower_tie_top = lower_plus_y + RAIL_H + RAIL_GAP
+        self._s11_lower_col_x: Dict[int, int] = {
+            col: lower_left + (col - 1) * PITCH for col in range(1, SUNNY11_LOWER_COLS + 1)
+        }
+        self._s11_lower_row_y: Dict[str, int] = {
+            row: lower_tie_top + i * PITCH for i, row in enumerate(SUNNY11_LOWER_ROWS)
+        }
+        self._s11_lower_plus_y  = lower_plus_y
+        self._s11_lower_minus_y = lower_minus_y
+
+        # Rail holes are sparser than tie columns and grouped in 5s (a gap
+        # after every 5th hole) — the same convention every other layout's
+        # rail_x() already uses — rather than one hole per tie column.
+        def _group5(base_x: int) -> List[int]:
+            return [base_x + (((i - 1) // 5) * 6 + (i - 1) % 5) * PITCH
+                    for i in range(1, SUNNY11_LOWER_RAIL_LEN + 1)]
+
+        self._s11_lower_plus_x: Dict[str, List[int]] = {
+            'lower_plus_left':  _group5(self._s11_lower_col_x[1]),
+            'lower_plus_right': _group5(self._s11_lower_col_x[SUNNY11_LOWER_HALF + 1]),
+        }
+        self._s11_lower_minus_x: List[int] = (
+            self._s11_lower_plus_x['lower_plus_left'] + self._s11_lower_plus_x['lower_plus_right']
+        )
+
+        self._s11_lower_top = lower_top - RAIL_H
+        lower_bottom  = self._s11_lower_row_y[SUNNY11_LOWER_ROWS[-1]] + MARGIN
+        self._s11_lower_bottom = lower_bottom
+        self._s11_lower_w = lower_w
+        lower_total_w = lower_left + lower_w + MARGIN
+
+        self.total_height = lower_bottom
+        self._total_width = max(upper_total_w, lower_total_w)
+
+        # --- 5 binding posts along the top edge (fixed; not user-configurable) ---
+        # Evenly spaced left-to-right in GND/V1/V2/V3/V4 order, matching the
+        # real hardware — the posts don't line up above their rail, since each
+        # one wires down to it internally regardless of where it sits on top.
+        n = len(TERMINAL_NAMES)
+        v_margin = TERM_R + MARGIN
+        spacing = (self._total_width - 2 * v_margin) // max(1, n - 1)
+        post_y = MARGIN + TERM_R
+        self._term_pos: Dict[str, Tuple[int, int]] = {
+            name: (v_margin + i * spacing, post_y) for i, name in enumerate(TERMINAL_NAMES)
+        }
+        self._term_y = {name: pos[1] for name, pos in self._term_pos.items()}
+
+    def _sunny11_hole_xy(self, hole: Hole) -> Optional[Tuple[int, int]]:
+        if isinstance(hole, TieHole):
+            if hole.section in (0, 1):
+                if hole.col not in self._s11_col_y or hole.row not in self._s11_row_x:
+                    return None
+                return (self._s11_block_left[hole.section] + self._s11_row_x[hole.row],
+                        self._s11_col_y[hole.col])
+            if hole.section == 2:
+                if hole.col not in self._s11_lower_col_x or hole.row not in self._s11_lower_row_y:
+                    return None
+                return self._s11_lower_col_x[hole.col], self._s11_lower_row_y[hole.row]
+            return None
+        if isinstance(hole, RailHole):
+            if hole.rail == 'top_plus':
+                xs = self._s11_plus_rail_x.get(hole.section)
+                if not xs or not (1 <= hole.index <= len(xs)):
+                    return None
+                return xs[hole.index - 1], self._s11_plus_y
+            if hole.rail == 'sunny_top_minus':
+                if not (1 <= hole.index <= len(self._s11_minus_top_x)):
+                    return None
+                return self._s11_minus_top_x[hole.index - 1], self._s11_minus_y
+            if hole.rail in ('lower_plus_left', 'lower_plus_right'):
+                xs = self._s11_lower_plus_x.get(hole.rail)
+                if not xs or not (1 <= hole.index <= len(xs)):
+                    return None
+                return xs[hole.index - 1], self._s11_lower_plus_y
+            if hole.rail == 'sunny_bot_minus':
+                if not (1 <= hole.index <= len(self._s11_lower_minus_x)):
+                    return None
+                return self._s11_lower_minus_x[hole.index - 1], self._s11_lower_minus_y
+            return None
+        if isinstance(hole, Terminal):
+            return self._term_pos.get(hole.name)
+        if isinstance(hole, ModulePin):
+            return self._module_pin_xy.get((hole.ref, hole.pin))
+        return None
+
+    def _sunny11_nearest(self, px: int, py: int, include_extra: bool = True) -> Optional[Hole]:
+        """include_extra=False mirrors nearest_probe_hole: ties/rails only."""
+        best: Optional[Hole] = None
+        best_d = PITCH
+
+        for section in (0, 1):
+            left = self._s11_block_left[section]
+            for row, rx_off in self._s11_row_x.items():
+                rx = left + rx_off
+                if abs(rx - px) > best_d:
+                    continue
+                for col, ry in self._s11_col_y.items():
+                    d = math.hypot(rx - px, ry - py)
+                    if d < best_d:
+                        best_d = d
+                        best = TieHole(col, row, section)
+
+        for row, ry in self._s11_lower_row_y.items():
+            if abs(ry - py) > best_d:
+                continue
+            for col, cx in self._s11_lower_col_x.items():
+                d = math.hypot(cx - px, ry - py)
+                if d < best_d:
+                    best_d = d
+                    best = TieHole(col, row, 2)
+
+        for section, xs in self._s11_plus_rail_x.items():
+            ry = self._s11_plus_y
+            if abs(ry - py) > best_d:
+                continue
+            for idx, rx in enumerate(xs, 1):
+                d = math.hypot(rx - px, ry - py)
+                if d < best_d:
+                    best_d = d
+                    best = RailHole('top_plus', idx, section)
+
+        ry = self._s11_minus_y
+        if abs(ry - py) <= best_d:
+            for idx, rx in enumerate(self._s11_minus_top_x, 1):
+                d = math.hypot(rx - px, ry - py)
+                if d < best_d:
+                    best_d = d
+                    best = RailHole('sunny_top_minus', idx)
+
+        for name, xs in self._s11_lower_plus_x.items():
+            ry = self._s11_lower_plus_y
+            if abs(ry - py) > best_d:
+                continue
+            for idx, rx in enumerate(xs, 1):
+                d = math.hypot(rx - px, ry - py)
+                if d < best_d:
+                    best_d = d
+                    best = RailHole(name, idx, 2)
+
+        ry = self._s11_lower_minus_y
+        if abs(ry - py) <= best_d:
+            for idx, rx in enumerate(self._s11_lower_minus_x, 1):
+                d = math.hypot(rx - px, ry - py)
+                if d < best_d:
+                    best_d = d
+                    best = RailHole('sunny_bot_minus', idx)
+
+        if include_extra:
+            for t_name in TERMINAL_NAMES:
+                xy = self._term_pos.get(t_name)
+                if xy:
+                    d = math.hypot(xy[0] - px, xy[1] - py)
+                    if d < best_d:
+                        best_d = d
+                        best = Terminal(t_name)
+            for (ref, pin), (hx, hy) in self._module_pin_xy.items():
+                d = math.hypot(hx - px, hy - py)
+                if d < best_d:
+                    best_d = d
+                    best = ModulePin(ref=ref, pin=pin)
+
+        return best
+
+    # ------------------------------------------------------------------
     # Coordinate helpers
     # ------------------------------------------------------------------
 
@@ -587,6 +826,8 @@ class CanvasLayout:
 
     def hole_xy(self, hole: Hole) -> Optional[Tuple[int, int]]:
         """Return (x, y) centre of a hole, or None if not renderable."""
+        if self.board_layout == 'sunny-11':
+            return self._sunny11_hole_xy(hole)
         if isinstance(hole, TieHole):
             s = hole.section
             if s >= self.sections:
@@ -626,6 +867,8 @@ class CanvasLayout:
 
     def nearest_hole(self, px: int, py: int) -> Optional[Hole]:
         """Return the hole closest to canvas pixel (px, py), within snap radius."""
+        if self.board_layout == 'sunny-11':
+            return self._sunny11_nearest(px, py, include_extra=True)
         best: Optional[Hole] = None
         best_d = PITCH
 
@@ -687,6 +930,8 @@ class CanvasLayout:
 
     def nearest_probe_hole(self, px: int, py: int) -> Optional[Hole]:
         """Return the nearest TieHole or RailHole (no terminals), within snap radius."""
+        if self.board_layout == 'sunny-11':
+            return self._sunny11_nearest(px, py, include_extra=False)
         best: Optional[Hole] = None
         best_d = PITCH
 
@@ -2683,16 +2928,19 @@ class BreadboardCanvas(wx.Panel):
         if self.show_baseboard:
             self._draw_baseboard(dc)
 
-        # Per-section board bodies, rails, holes
-        for section in range(lay.sections):
-            self._draw_section_body(dc, section)
-            if lay.has_rails:
-                self._draw_rails(dc, section)
-            self._draw_center_gap(dc, section)
-            self._draw_holes(dc, section)
+        if lay.board_layout == 'sunny-11':
+            self._draw_board_sunny11(dc)
+        else:
+            # Per-section board bodies, rails, holes
+            for section in range(lay.sections):
+                self._draw_section_body(dc, section)
+                if lay.has_rails:
+                    self._draw_rails(dc, section)
+                self._draw_center_gap(dc, section)
+                self._draw_holes(dc, section)
 
-        if lay.board_layout in ('triple', 'double_rails'):
-            self._draw_vert_rails(dc)
+            if lay.board_layout in ('triple', 'double_rails'):
+                self._draw_vert_rails(dc)
 
         self._draw_components(dc)
         if self._pin_drag_ref is not None:
@@ -2712,7 +2960,8 @@ class BreadboardCanvas(wx.Panel):
             self._draw_wire_start_indicator(dc)
 
         self._draw_annotations(dc)
-        self._draw_column_labels(dc)
+        if lay.board_layout != 'sunny-11':
+            self._draw_column_labels(dc)
         self._draw_validation_icons(dc)
         self._draw_sim_overlay(dc)
 
@@ -3038,6 +3287,118 @@ class BreadboardCanvas(wx.Panel):
             dc.SetBrush(wx.Brush('#444444'))
             dc.SetPen(wx.Pen('#222222', 1))
         dc.DrawCircle(cx, cy, HOLE_R)
+
+    def _draw_s11_rail(self, dc: wx.DC, xs: List[int], y: int, color: str, symbol: str,
+                       rail_name: str, section: int = 0, symbol_ends: str = 'both') -> None:
+        """symbol_ends restricts the +/- end labels to 'left', 'right', or 'both' —
+        used to avoid two labels colliding where a rail is split (e.g. V3 | V4)."""
+        if not xs:
+            return
+        strip_h = RAIL_H - 4
+        x_left  = min(xs) - PITCH // 2
+        x_right = max(xs) + PITCH // 2
+        stripe = wx.Rect(x_left, y - strip_h // 2, x_right - x_left, strip_h)
+        dc.SetBrush(wx.Brush(color))
+        dc.SetPen(wx.Pen(color, 0))
+        dc.DrawRoundedRectangle(stripe, 3)
+        for idx, x in enumerate(xs, 1):
+            self._draw_hole_dot(dc, x, y, RailHole(rail_name, idx, section))
+        dc.SetFont(wx.Font(8, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
+        dc.SetTextForeground('#444444')
+        if symbol_ends in ('left', 'both'):
+            dc.DrawText(symbol, x_left - PITCH // 2, y - 7)
+        if symbol_ends in ('right', 'both'):
+            dc.DrawText(symbol, x_right + 4, y - 7)
+
+    def _draw_board_sunny11(self, dc: wx.DC) -> None:
+        """Bespoke paint path for the sunny-11 layout: two portrait tie-blocks
+        (V1/V2) side by side over one landscape tie-block (V3/V4)."""
+        lay = self.layout
+
+        # One continuous board body (the real hardware is a single moulded
+        # piece with three tie-hole "slots" cut into it, not separate boards
+        # placed side by side) — internal divisions are drawn as grooves in
+        # the same body colour, never as gaps showing the canvas background.
+        overall_left  = min(lay._s11_block_left[0], lay._s11_lower_col_x[1]) - PITCH
+        overall_right = max(lay._s11_block_left[1] + lay._s11_block_w,
+                             lay._s11_lower_col_x[SUNNY11_LOWER_COLS]) + PITCH
+        overall_top    = lay._s11_block_top - MARGIN // 2
+        overall_bottom = lay._s11_lower_bottom
+        board_rect = wx.Rect(overall_left, overall_top,
+                             overall_right - overall_left, overall_bottom - overall_top)
+        dc.SetBrush(wx.Brush('#e8e0c8'))
+        dc.SetPen(wx.Pen('#b0a090', 1))
+        dc.DrawRoundedRectangle(board_rect, 8)
+
+        # Groove between the V1 and V2 slots (full height: rails + tie area)
+        groove_rect = wx.Rect(
+            lay._s11_block_left[0] + lay._s11_block_w,
+            overall_top,
+            SUNNY11_BLOCK_GAP_X,
+            lay._s11_block_bottom - overall_top,
+        )
+        dc.SetBrush(wx.Brush('#c0b898'))
+        dc.SetPen(wx.Pen('#a09080', 1))
+        dc.DrawRectangle(groove_rect)
+
+        # Horizontal centre gap (a-e | f-j) in each portrait block
+        bank_w = (len(TOP_ROWS) - 1) * PITCH
+        for section in (0, 1):
+            left = lay._s11_block_left[section]
+            gap_rect = wx.Rect(
+                left + bank_w + PITCH // 2,
+                lay._s11_col_y[1] - PITCH,
+                SUNNY11_GAP - PITCH,
+                lay._s11_col_y[SUNNY11_UPPER_COLS] - lay._s11_col_y[1] + 2 * PITCH,
+            )
+            dc.SetBrush(wx.Brush('#c0b898'))
+            dc.SetPen(wx.Pen('#a09080', 1))
+            dc.DrawRectangle(gap_rect)
+
+        # Small notch marking the V3/V4 split — the tie-hole grid underneath
+        # stays one continuous, ungapped row (matching the real board). Flush
+        # with the outer edges of the two rail stripes (drawn afterwards, on
+        # top) so only the sliver between them peeks through, not a nub
+        # poking out above/below the rail band.
+        lower_gap_x = (lay._s11_lower_col_x[SUNNY11_LOWER_HALF]
+                       + lay._s11_lower_col_x[SUNNY11_LOWER_HALF + 1]) // 2
+        notch_w = PITCH // 2
+        strip_h = RAIL_H - 4
+        notch_top = lay._s11_lower_minus_y - strip_h // 2
+        notch_bottom = lay._s11_lower_plus_y + strip_h // 2
+        lower_notch_rect = wx.Rect(
+            lower_gap_x - notch_w // 2,
+            notch_top,
+            notch_w,
+            notch_bottom - notch_top,
+        )
+        dc.SetBrush(wx.Brush('#c0b898'))
+        dc.SetPen(wx.Pen('#a09080', 1))
+        dc.DrawRectangle(lower_notch_rect)
+
+        # Rails
+        self._draw_s11_rail(dc, lay._s11_minus_top_x, lay._s11_minus_y,
+                             '#2244cc', '−', 'sunny_top_minus')
+        for section in (0, 1):
+            self._draw_s11_rail(dc, lay._s11_plus_rail_x[section], lay._s11_plus_y,
+                                 '#cc2222', '+', 'top_plus', section)
+        self._draw_s11_rail(dc, lay._s11_lower_minus_x, lay._s11_lower_minus_y,
+                             '#2244cc', '−', 'sunny_bot_minus')
+        self._draw_s11_rail(dc, lay._s11_lower_plus_x['lower_plus_left'], lay._s11_lower_plus_y,
+                             '#cc2222', '+', 'lower_plus_left', 2, symbol_ends='left')
+        self._draw_s11_rail(dc, lay._s11_lower_plus_x['lower_plus_right'], lay._s11_lower_plus_y,
+                             '#cc2222', '+', 'lower_plus_right', 2, symbol_ends='right')
+
+        # Tie holes
+        for section in (0, 1):
+            left = lay._s11_block_left[section]
+            for row, rx_off in lay._s11_row_x.items():
+                rx = left + rx_off
+                for col, ry in lay._s11_col_y.items():
+                    self._draw_hole_dot(dc, rx, ry, TieHole(col, row, section))
+        for row, ry in lay._s11_lower_row_y.items():
+            for col, cx in lay._s11_lower_col_x.items():
+                self._draw_hole_dot(dc, cx, ry, TieHole(col, row, 2))
 
     def _draw_pin_drag_preview(self, dc: wx.DC) -> None:
         """Draw the component being pin-dragged at its current (live) position."""

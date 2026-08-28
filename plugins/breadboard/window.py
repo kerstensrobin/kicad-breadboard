@@ -38,6 +38,7 @@ from .model import (
     ALL_DEFS, guess_type_id,
     save_session, load_session,
     PROBE_NAMES, PROBE_META,
+    TERMINAL_NAMES,
 )
 
 PLUGIN_VERSION = '1.1.2'
@@ -375,11 +376,12 @@ class BreadboardWindow(wx.Frame):
                                    wx.FONTWEIGHT_BOLD))
         binding_sizer.Add(term_label, 0, wx.LEFT | wx.TOP | wx.RIGHT, 6)
 
-        _TERM_COLORS = {'GND': '#3a3a3a', 'V1': '#bb2020', 'V2': '#1a7a30', 'V3': '#1a5a8a'}
+        _TERM_COLORS = {'GND': '#3a3a3a', 'V1': '#bb2020', 'V2': '#1a7a30', 'V3': '#1a5a8a',
+                        'V4': '#7a3a9a'}
         self._term_choices: dict = {}
         self._term_row_panels: dict = {}
         term_rows_sizer = wx.BoxSizer(wx.VERTICAL)
-        for name in ('GND', 'V1', 'V2', 'V3'):
+        for name in TERMINAL_NAMES:
             row = wx.Panel(self._binding_panel)
             row_sz = wx.BoxSizer(wx.HORIZONTAL)
             lbl = wx.StaticText(row, label=name)
@@ -1406,7 +1408,7 @@ class BreadboardWindow(wx.Frame):
 
     def _refresh_terminal_rows(self, num_terminals: int) -> None:
         """Show/hide terminal rows in the binding panel based on num_terminals."""
-        for i, name in enumerate(('GND', 'V1', 'V2', 'V3')):
+        for i, name in enumerate(TERMINAL_NAMES):
             row = self._term_row_panels.get(name)
             if row:
                 row.Show(i < num_terminals)
@@ -2507,7 +2509,7 @@ class PreferencesDialog(wx.Dialog):
                 buttons.append(rb)
             return row, buttons
 
-        _layout_map = ['mini', 'half', 'full', 'double', 'triple', 'double_rails']
+        _layout_map = ['mini', 'half', 'full', 'double', 'triple', 'double_rails', 'sunny-11']
         _side_map   = ['left', 'right', 'top_left', 'top_center', 'top_right',
                        'bottom_left', 'bottom_center', 'bottom_right']
 
@@ -2561,6 +2563,7 @@ class PreferencesDialog(wx.Dialog):
             'Mini (170 holes, no rails)', 'Half (400 holes)', 'Full (830 holes)',
             'Double (2× full, stacked)', 'Triple (3× full + vertical rails)',
             'Double + side rails (2× full, left & right rails)',
+            'Sunny-11 (dual-rail portrait style)',
         ])
         self._ch_layout.SetSelection(
             _layout_map.index(prefs.board_layout) if prefs.board_layout in _layout_map else 2)
@@ -2606,8 +2609,16 @@ class PreferencesDialog(wx.Dialog):
         def _update_terminal_choices(_evt=None):
             layout  = _layout_map[self._ch_layout.GetSelection()]
             side    = _side_map[self._ch_post_side.GetSelection()]
-            allow_4 = side not in ('left', 'right') or layout in ('double', 'triple', 'double_rails')
             btn4 = self._rb_num_terminals[2]
+            if layout == 'sunny-11':
+                # Fixed 5-post layout (GND + V1-V4), matching the real hardware —
+                # not user-configurable.
+                for btn in self._rb_num_terminals:
+                    btn.Enable(False)
+                return
+            for btn in self._rb_num_terminals:
+                btn.Enable(True)
+            allow_4 = side not in ('left', 'right') or layout in ('double', 'triple', 'double_rails')
             if not allow_4:
                 if btn4.GetValue():
                     self._rb_num_terminals[1].SetValue(True)
@@ -2678,13 +2689,18 @@ class PreferencesDialog(wx.Dialog):
         self.CentreOnParent()
 
     def get_prefs(self) -> Preferences:
-        _layout_map = ['mini', 'half', 'full', 'double', 'triple', 'double_rails']
+        _layout_map = ['mini', 'half', 'full', 'double', 'triple', 'double_rails', 'sunny-11']
         _side_map   = ['left', 'right', 'top_left', 'top_center', 'top_right',
                        'bottom_left', 'bottom_center', 'bottom_right']
         _style_map  = ['bbrd_classic', 'bbrd_modern', 'solid_line', 'none']
 
         def _sel(buttons) -> int:
             return next(i for i, b in enumerate(buttons) if b.GetValue())
+
+        _board_layout = _layout_map[self._ch_layout.GetSelection()]
+        # sunny-11 has a fixed 5-post layout (GND + V1-V4); the radio group is
+        # disabled for it in the UI, so ignore its selection here too.
+        _num_terminals = 5 if _board_layout == 'sunny-11' else _sel(self._rb_num_terminals) + 2
 
         return Preferences(
             instruments_enabled=self._cb_instr.IsChecked(),
@@ -2694,9 +2710,9 @@ class PreferencesDialog(wx.Dialog):
             show_net_labels=self._cb_labels.IsChecked(),
             show_hotkeys=self._cb_hotkeys.IsChecked(),
             show_binding_posts=self._cb_binding.IsChecked(),
-            num_terminals=_sel(self._rb_num_terminals) + 2,
+            num_terminals=_num_terminals,
             export_format='svg' if self._rb_fmt[1].GetValue() else 'png',
-            board_layout=_layout_map[self._ch_layout.GetSelection()],
+            board_layout=_board_layout,
             binding_post_side=_side_map[self._ch_post_side.GetSelection()],
             show_baseboard=self._cb_baseboard.IsChecked(),
             baseboard_color=self._cp_base.GetColour().GetAsString(wx.C2S_HTML_SYNTAX),
