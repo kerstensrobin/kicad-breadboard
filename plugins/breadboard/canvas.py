@@ -77,7 +77,7 @@ from .model import (
     COLUMNS, HALF_COLUMNS, MINI_COLUMNS, TOP_ROWS, BOT_ROWS, ALL_ROWS,
     RAIL_NAMES, VERT_RAIL_NAMES, RAIL_LEN, VERT_RAIL_LEN_PER_SECTION, RAIL_SPLIT, TERMINAL_NAMES,
     RAILLESS_LAYOUTS,
-    SUNNY11_UPPER_COLS, SUNNY11_UPPER_RAIL_LEN, SUNNY11_LOWER_COLS, SUNNY11_LOWER_HALF,
+    SUNNY11_UPPER_COLS, SUNNY11_UPPER_RAIL_LEN, SUNNY11_LOWER_COLS,
     SUNNY11_LOWER_RAIL_LEN, SUNNY11_LOWER_ROWS,
     PROBE_NAMES, PROBE_META,
     ComponentDef, ALL_DEFS,
@@ -138,7 +138,7 @@ SUNNY11_GAP = CENTER_GAP        # horizontal gap between the a-e/f-j banks
 SUNNY11_BLOCK_GAP_X = SUNNY11_GAP  # gap between the V1 and V2 blocks — the same
                                     # width as the internal a-e/f-j dividers, not
                                     # a wider seam, matching the real board
-SUNNY11_BLOCK_GAP_Y = 50        # gap between the upper blocks and the lower block
+SUNNY11_BLOCK_GAP_Y = 36        # gap between the upper blocks and the lower block
 
 # Binding posts (circular)
 TERM_R = 30         # radius of binding-post circle
@@ -589,6 +589,11 @@ class CanvasLayout:
         self._module_pin_xy: Dict[Tuple[str, int], Tuple[int, int]] = {}
 
         # --- Portrait blocks: row-letter axis -> x, column-number axis -> y ---
+        # Pitch is the same PITCH used everywhere else on the board (upper and
+        # lower, both axes) — SUNNY11_LOWER_COLS is chosen so the lower
+        # block's natural width already lands close to the upper pair's,
+        # rather than stretching one section's hole spacing to force a match.
+        self._s11_row_pitch = PITCH
         bank_w = (len(TOP_ROWS) - 1) * PITCH
         self._s11_row_x: Dict[str, int] = {}
         for i, row in enumerate(TOP_ROWS):
@@ -596,8 +601,10 @@ class CanvasLayout:
         for i, row in enumerate(BOT_ROWS):
             self._s11_row_x[row] = bank_w + SUNNY11_GAP + i * PITCH
         block_w = bank_w + SUNNY11_GAP + bank_w
+        self._s11_gap_upper = SUNNY11_GAP
+        self._s11_gap_block_x = SUNNY11_BLOCK_GAP_X
 
-        post_area_h = TERM_R * 2 + MARGIN * 2
+        post_area_h = TERM_R * 2 + MARGIN * 3
         minus_y = post_area_h + MARGIN // 2
         plus_y  = minus_y + RAIL_H + 2
         tie_top_y = plus_y + RAIL_H + RAIL_GAP
@@ -611,10 +618,9 @@ class CanvasLayout:
         upper_block_bottom = self._s11_col_y[SUNNY11_UPPER_COLS] + MARGIN // 2
         self._s11_block_bottom = upper_block_bottom
 
-        # The lower block (30 columns) is inherently wider than the two
-        # portrait blocks combined, so it anchors at the left margin and the
-        # upper pair is shifted right to share its centre — not the other way
-        # round, which would push the wider block off-canvas to the left.
+        # The lower block and the upper pair now land close in natural width
+        # (see SUNNY11_LOWER_COLS), so centre whichever is wider and shift the
+        # other to share that centre, rather than assuming which way round.
         lower_w = (SUNNY11_LOWER_COLS - 1) * PITCH
         lower_left = MARGIN
         lower_center = lower_left + lower_w // 2
@@ -633,10 +639,13 @@ class CanvasLayout:
         upper_total_w = self._s11_block_left[1] + block_w + MARGIN
 
         # --- Landscape lower block: standard orientation ---
-        lower_top     = upper_block_bottom + SUNNY11_BLOCK_GAP_Y
-        lower_minus_y = lower_top
-        lower_plus_y  = lower_minus_y + RAIL_H + 2
-        lower_tie_top = lower_plus_y + RAIL_H + RAIL_GAP
+        # Unlike the upper blocks (minus on top, plus nearer the tie rows),
+        # the real board prints the lower block's rails the other way round:
+        # plus (V3/V4) on top, minus nearer the tie rows.
+        lower_top    = upper_block_bottom + SUNNY11_BLOCK_GAP_Y
+        lower_plus_y  = lower_top
+        lower_minus_y = lower_plus_y + RAIL_H + 2
+        lower_tie_top = lower_minus_y + RAIL_H + RAIL_GAP
         self._s11_lower_col_x: Dict[int, int] = {
             col: lower_left + (col - 1) * PITCH for col in range(1, SUNNY11_LOWER_COLS + 1)
         }
@@ -646,16 +655,21 @@ class CanvasLayout:
         self._s11_lower_plus_y  = lower_plus_y
         self._s11_lower_minus_y = lower_minus_y
 
-        # Rail holes are sparser than tie columns and grouped in 5s (a gap
-        # after every 5th hole) — the same convention every other layout's
-        # rail_x() already uses — rather than one hole per tie column.
-        def _group5(base_x: int) -> List[int]:
-            return [base_x + (((i - 1) // 5) * 6 + (i - 1) % 5) * PITCH
-                    for i in range(1, SUNNY11_LOWER_RAIL_LEN + 1)]
+        # Same construction as the V1/V2 rails above (a 5-hole bank, gap,
+        # 5-hole bank per half, and the same-size gap between halves),
+        # mirrored horizontally — rather than a different scheme for the
+        # bottom rails. Centred within the lower block's own width so the
+        # V3/V4 gap still lines up with the groove between the V1/V2 blocks.
+        def _half(start: int) -> List[int]:
+            return ([start + i * PITCH for i in range(len(TOP_ROWS))]
+                    + [start + bank_w + SUNNY11_GAP + i * PITCH for i in range(len(TOP_ROWS))])
 
+        rail_half_w = block_w
+        rail_total_w = 2 * rail_half_w + SUNNY11_BLOCK_GAP_X
+        rail_start = lower_left + (lower_w - rail_total_w) // 2
         self._s11_lower_plus_x: Dict[str, List[int]] = {
-            'lower_plus_left':  _group5(self._s11_lower_col_x[1]),
-            'lower_plus_right': _group5(self._s11_lower_col_x[SUNNY11_LOWER_HALF + 1]),
+            'lower_plus_left':  _half(rail_start),
+            'lower_plus_right': _half(rail_start + rail_half_w + SUNNY11_BLOCK_GAP_X),
         }
         self._s11_lower_minus_x: List[int] = (
             self._s11_lower_plus_x['lower_plus_left'] + self._s11_lower_plus_x['lower_plus_right']
@@ -665,10 +679,51 @@ class CanvasLayout:
         lower_bottom  = self._s11_lower_row_y[SUNNY11_LOWER_ROWS[-1]] + MARGIN
         self._s11_lower_bottom = lower_bottom
         self._s11_lower_w = lower_w
-        lower_total_w = lower_left + lower_w + MARGIN
 
-        self.total_height = lower_bottom
-        self._total_width = max(upper_total_w, lower_total_w)
+        # --- Baseboard protrusion & consistent margins on every side ---
+        # The formulas above only reserve trailing margin on the right and
+        # bottom edges; the left edge lands only a hole's pitch away from the
+        # canvas edge. Recompute the true content bounds and shift
+        # everything so the board sits with a uniform, slightly generous
+        # margin on all four sides instead.
+        post_y_local = MARGIN + TERM_R
+        content_left   = min(self._s11_block_left[0], self._s11_lower_col_x[1]) - PITCH
+        content_right  = max(self._s11_block_left[1] + block_w,
+                              self._s11_lower_col_x[SUNNY11_LOWER_COLS]) + PITCH
+        content_top    = min(self._s11_block_top, post_y_local - TERM_R)
+        content_bottom = lower_bottom
+
+        outer_pad = MARGIN + 6    # more generous than the plain MARGIN other
+                                  # layouts use, so the baseboard clearly
+                                  # protrudes beyond the board on every side
+        dx = outer_pad - content_left
+        dy = outer_pad - content_top
+
+        for col in self._s11_col_y:
+            self._s11_col_y[col] += dy
+        self._s11_plus_y  += dy
+        self._s11_minus_y += dy
+        self._s11_block_top    += dy
+        self._s11_block_bottom += dy
+        for section in self._s11_block_left:
+            self._s11_block_left[section] += dx
+        for section in self._s11_plus_rail_x:
+            self._s11_plus_rail_x[section] = [x + dx for x in self._s11_plus_rail_x[section]]
+        self._s11_minus_top_x = [x + dx for x in self._s11_minus_top_x]
+        for col in self._s11_lower_col_x:
+            self._s11_lower_col_x[col] += dx
+        for row in self._s11_lower_row_y:
+            self._s11_lower_row_y[row] += dy
+        self._s11_lower_plus_y  += dy
+        self._s11_lower_minus_y += dy
+        for name in self._s11_lower_plus_x:
+            self._s11_lower_plus_x[name] = [x + dx for x in self._s11_lower_plus_x[name]]
+        self._s11_lower_minus_x = [x + dx for x in self._s11_lower_minus_x]
+        self._s11_lower_top    += dy
+        self._s11_lower_bottom += dy
+
+        self._total_width = (content_right - content_left) + 2 * outer_pad
+        self.total_height = (content_bottom - content_top) + 2 * outer_pad
 
         # --- 5 binding posts along the top edge (fixed; not user-configurable) ---
         # Evenly spaced left-to-right in GND/V1/V2/V3/V4 order, matching the
@@ -677,7 +732,7 @@ class CanvasLayout:
         n = len(TERMINAL_NAMES)
         v_margin = TERM_R + MARGIN
         spacing = (self._total_width - 2 * v_margin) // max(1, n - 1)
-        post_y = MARGIN + TERM_R
+        post_y = post_y_local + dy
         self._term_pos: Dict[str, Tuple[int, int]] = {
             name: (v_margin + i * spacing, post_y) for i, name in enumerate(TERMINAL_NAMES)
         }
@@ -3332,51 +3387,38 @@ class BreadboardCanvas(wx.Panel):
         dc.SetPen(wx.Pen('#b0a090', 1))
         dc.DrawRoundedRectangle(board_rect, 8)
 
-        # Groove between the V1 and V2 slots (full height: rails + tie area)
+        # Groove between the V1 and V2 slots — same vertical extent as the
+        # internal a-e/f-j gaps (tie area only, not up through the rails),
+        # and inset half a pitch on each side, in between the neighbouring
+        # holes rather than spanning hole-centre to hole-centre.
         groove_rect = wx.Rect(
-            lay._s11_block_left[0] + lay._s11_block_w,
-            overall_top,
-            SUNNY11_BLOCK_GAP_X,
-            lay._s11_block_bottom - overall_top,
+            lay._s11_block_left[0] + lay._s11_block_w + lay._s11_row_pitch // 2,
+            lay._s11_col_y[1] - PITCH,
+            lay._s11_gap_block_x - lay._s11_row_pitch,
+            lay._s11_col_y[SUNNY11_UPPER_COLS] - lay._s11_col_y[1] + 2 * PITCH,
         )
         dc.SetBrush(wx.Brush('#c0b898'))
         dc.SetPen(wx.Pen('#a09080', 1))
         dc.DrawRectangle(groove_rect)
 
         # Horizontal centre gap (a-e | f-j) in each portrait block
-        bank_w = (len(TOP_ROWS) - 1) * PITCH
+        bank_w = (len(TOP_ROWS) - 1) * lay._s11_row_pitch
         for section in (0, 1):
             left = lay._s11_block_left[section]
             gap_rect = wx.Rect(
-                left + bank_w + PITCH // 2,
+                left + bank_w + lay._s11_row_pitch // 2,
                 lay._s11_col_y[1] - PITCH,
-                SUNNY11_GAP - PITCH,
+                lay._s11_gap_upper - lay._s11_row_pitch,
                 lay._s11_col_y[SUNNY11_UPPER_COLS] - lay._s11_col_y[1] + 2 * PITCH,
             )
             dc.SetBrush(wx.Brush('#c0b898'))
             dc.SetPen(wx.Pen('#a09080', 1))
             dc.DrawRectangle(gap_rect)
 
-        # Small notch marking the V3/V4 split — the tie-hole grid underneath
-        # stays one continuous, ungapped row (matching the real board). Flush
-        # with the outer edges of the two rail stripes (drawn afterwards, on
-        # top) so only the sliver between them peeks through, not a nub
-        # poking out above/below the rail band.
-        lower_gap_x = (lay._s11_lower_col_x[SUNNY11_LOWER_HALF]
-                       + lay._s11_lower_col_x[SUNNY11_LOWER_HALF + 1]) // 2
-        notch_w = PITCH // 2
-        strip_h = RAIL_H - 4
-        notch_top = lay._s11_lower_minus_y - strip_h // 2
-        notch_bottom = lay._s11_lower_plus_y + strip_h // 2
-        lower_notch_rect = wx.Rect(
-            lower_gap_x - notch_w // 2,
-            notch_top,
-            notch_w,
-            notch_bottom - notch_top,
-        )
-        dc.SetBrush(wx.Brush('#c0b898'))
-        dc.SetPen(wx.Pen('#a09080', 1))
-        dc.DrawRectangle(lower_notch_rect)
+        # No extra marker needed at the V3/V4 split: the two rail stripes
+        # (drawn below) are already independent shapes with a real gap
+        # between them, same as the V1/V2 rails above — an added notch here
+        # only showed up as an odd dip in the plus rail's edge.
 
         # Rails
         self._draw_s11_rail(dc, lay._s11_minus_top_x, lay._s11_minus_y,
