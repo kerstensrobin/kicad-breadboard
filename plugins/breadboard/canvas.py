@@ -133,7 +133,9 @@ BRAND_STRIP = 80    # extra space (px) added on the binding-post side for the br
 # other layout (columns run vertically, bank-rows run horizontally) and sit
 # side by side, portrait-oriented.
 SUNNY11_GAP = CENTER_GAP        # horizontal gap between the a-e/f-j banks
-SUNNY11_BLOCK_GAP_X = 40        # gap between the V1 and V2 portrait blocks
+SUNNY11_BLOCK_GAP_X = SUNNY11_GAP  # gap between the V1 and V2 blocks — the same
+                                    # width as the internal a-e/f-j dividers, not
+                                    # a wider seam, matching the real board
 SUNNY11_BLOCK_GAP_Y = 50        # gap between the upper blocks and the lower block
 
 # Binding posts (circular)
