@@ -42,7 +42,7 @@ class Preferences:
     branding_image: str = ''           # path to custom branding image (empty = built-in default)
     show_hotkeys: bool = True          # show hotkey reference panel in the side tray
     rail_split: bool = True            # power rails are electrically split in the middle
-    rail_style: str = 'bbrd_classic'  # 'bbrd_classic', 'bbrd_modern', 'solid_line', or 'none'
+    rail_style: str = 'solid_line'  # 'bbrd_classic', 'bbrd_modern', 'solid_line', or 'none'
     load_on_startup: bool = False      # restore these saved settings on next launch
 
 

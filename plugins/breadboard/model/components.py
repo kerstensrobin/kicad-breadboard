@@ -39,8 +39,36 @@ class PinOffset:
     cross_gap: bool = False
     row_delta: int = 0
 
-    def resolve(self, anchor: TieHole, flipped: bool = False,
-                cross_flip: bool = True) -> TieHole:
+    def resolve(self, anchor: TieHole, flipped: int = 0,
+                cross_flip: bool = True, quad_rotate: bool = False) -> TieHole:
+        """
+        quad_rotate=True (single-bank parts with 3+ pins: TO-92, sliders, POT):
+        `flipped` is 0/1/2/3 = 0°/90°/180°/270° clockwise. 0° and 180° keep the
+        pins on the column axis (180° also mirrors the order, like the old
+        boolean flip); 90° and 270° rotate the spread onto the row axis
+        instead (same column, adjacent rows) — needed on portrait board
+        layouts (e.g. sunny-11) where "column" is the screen's vertical axis.
+        Raises IndexError if a 90°/270° pin would land outside the row bank.
+
+        quad_rotate=False (DIP ICs, 2-pin axial): original 2-state behaviour —
+        `flipped` truthy negates col_delta, and for DIP also swaps the
+        cross_gap side (top↔bottom of the IC).
+        """
+        if quad_rotate:
+            turns = flipped % 4
+            bank = TOP_ROWS if anchor.row in TOP_ROWS else BOT_ROWS
+            anchor_idx = bank.index(anchor.row)
+            if turns in (0, 2):
+                col = anchor.col + (-self.col_delta if turns == 2 else self.col_delta)
+                row_idx = anchor_idx + self.row_delta
+            else:
+                col = anchor.col
+                row_off = self.col_delta if turns == 1 else -self.col_delta
+                row_idx = anchor_idx + row_off + self.row_delta
+            if not (0 <= row_idx < len(bank)):
+                raise IndexError('pin lands outside the row bank at this rotation')
+            return TieHole(col, bank[row_idx], anchor.section)
+
         col = anchor.col + (-self.col_delta if flipped else self.col_delta)
         # cross_gap inversion on flip only applies to DIP ICs (top↔bottom side swap).
         # Single-row components (POT, TO-92, axial) pass cross_flip=False so their
@@ -72,16 +100,19 @@ class ComponentDef:
     def pin_count(self) -> int:
         return len(self.pin_offsets)
 
-    def place(self, anchor: TieHole, flipped: bool = False) -> Dict[int, Hole]:
+    def place(self, anchor: TieHole, flipped: int = 0) -> Dict[int, Hole]:
         """
         Resolve all pin holes given an anchor hole.
         For DIP ICs the anchor row is forced to 'e'.
-        When flipped=True the component is mirrored horizontally (col_deltas negated).
+        Single-bank components with 3+ pins (TO-92, sliders, POT) get 4-way
+        90°-step rotation (see PinOffset.resolve's quad_rotate); DIP ICs and
+        2-pin axial parts keep the original 0/1 mirror-only behaviour.
         Returns {pin_number: TieHole}.
         """
         if self.is_dip:
             anchor = TieHole(anchor.col, 'e', anchor.section)
-        return {pin: offset.resolve(anchor, flipped, cross_flip=self.is_dip)
+        quad = not self.is_dip and not self.is_module and self.pin_count >= 3
+        return {pin: offset.resolve(anchor, flipped, cross_flip=self.is_dip, quad_rotate=quad)
                 for pin, offset in self.pin_offsets.items()}
 
     def footprint_cols(self) -> int:

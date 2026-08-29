@@ -63,6 +63,7 @@ ID_PIN_FN       = wx.NewIdRef()
 ID_ZOOM_IN      = wx.NewIdRef()
 ID_ZOOM_OUT     = wx.NewIdRef()
 ID_ZOOM_FIT     = wx.NewIdRef()
+ID_ROTATE_VIEW  = wx.NewIdRef()
 ID_EESCHEMA     = wx.NewIdRef()
 ID_UNDO         = wx.NewIdRef()
 ID_REDO         = wx.NewIdRef()
@@ -727,6 +728,8 @@ class BreadboardWindow(wx.Frame):
                    shortHelp='Zoom out  [-]')
         tb.AddTool(ID_ZOOM_FIT, 'Fit View', _kicad_icon('zoom_fit_in_page_24.png', _ico),
                    shortHelp='Fit board in view  [Ctrl+Home]')
+        tb.AddTool(ID_ROTATE_VIEW, 'Rotate View', _kicad_icon('rotate_cw_24.png', _ico),
+                   shortHelp='Rotate the view 90°')
         tb.AddSeparator()
 
         # Schematic sync
@@ -795,6 +798,7 @@ class BreadboardWindow(wx.Frame):
         self.Bind(wx.EVT_TOOL, self._on_zoom_in,  id=ID_ZOOM_IN)
         self.Bind(wx.EVT_TOOL, self._on_zoom_out, id=ID_ZOOM_OUT)
         self.Bind(wx.EVT_TOOL, self._on_zoom_fit, id=ID_ZOOM_FIT)
+        self.Bind(wx.EVT_TOOL, self._on_rotate_view, id=ID_ROTATE_VIEW)
         self.Bind(wx.EVT_TOOL, self._on_eeschema, id=ID_EESCHEMA)
         self.Bind(wx.EVT_TOOL, lambda _: self.canvas.undo(), id=ID_UNDO)
         self.Bind(wx.EVT_TOOL, lambda _: self.canvas.redo(), id=ID_REDO)
@@ -911,6 +915,9 @@ class BreadboardWindow(wx.Frame):
 
     def _on_zoom_fit(self, _evt) -> None:
         self.canvas._fit_view()
+
+    def _on_rotate_view(self, _evt) -> None:
+        self.canvas.rotate_view()
 
     def _on_eeschema(self, _evt) -> None:
         import subprocess, shutil, sys
