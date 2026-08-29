@@ -6,13 +6,12 @@
 
 A KiCad 9 / 10 plugin for introductory analog electronics courses at the University of Antwerp. Draw your schematic in Eeschema, then wire it up on a virtual breadboard, validate it against the schematic, and run simple SPICE checks from the breadboard view.
 
-Current release name: **Whole Wheat**.
 <img width="1903" height="1028" alt="Screenshot from 2026-05-12 16-35-15" src="https://github.com/user-attachments/assets/7d0a3ede-aceb-434c-a190-176f87505a63" />
 <img width="1903" height="1028" alt="Screenshot from 2026-05-12 16-35-00" src="https://github.com/user-attachments/assets/86789f64-c4c8-4637-9bec-9b7a30d2c88d" />
 
 
 
-## Whole Wheat highlights
+## v1.1.x highlights
 
 - Graphical overhaul with refreshed toolbar/menu icons, improved component rendering, and clearer side panels
 - Drawing annotations: add lines, rectangles, circles, text, and text boxes directly on the breadboard
@@ -32,6 +31,8 @@ Current release name: **Whole Wheat**.
 ## Installation
 
 > Built on [CachyOS](https://cachyos.org) — tested on CachyOS, Ubuntu, and Windows.
+
+Note: This tool can also be downloaded using KiCad's built-in [Plugin and Content Manager](https://docs.kicad.org/10.0/en/kicad/kicad.html#plugin-content-manager). For a manual install of the latest GitHub version, follow the steps below:
 
 **1. Clone the repository**
 ```bash
