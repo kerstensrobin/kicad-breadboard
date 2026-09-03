@@ -378,4 +378,4 @@ This passes your shell environment (including `PATH`) to KiCad and the plugin wi
 
 ---
 
-Made with ♥ by [nacho.works](https://nacho.works) and [University of Antwerp](https://www.uantwerpen.be/en/), Belgium.
+Made with ♥ by [nacho.works](https://nacho.works) and [University of Antwerp](https://www.uantwerpen.be/en/about-uantwerp/faculties/faculty-of-applied-engineering/), Belgium.
