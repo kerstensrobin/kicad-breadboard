@@ -1277,6 +1277,7 @@ class BreadboardCanvas(wx.Panel):
         self._ghost: Optional[DragGhost] = None      # component pending placement
         self._ghost_pos: Tuple[int, int] = (0, 0)    # current mouse pos
         self._place_pin1: Optional[Hole] = None       # locked pin-1 hole for 2-pin two-step placement
+        self._ratsnest_notice: str = ''              # set by _draw_ratsnest when a net has no board target yet
 
         self._selected_ref: Optional[str] = None     # selected placed component
         self._selected_wire: Optional[Wire] = None   # selected wire
@@ -1325,6 +1326,7 @@ class BreadboardCanvas(wx.Panel):
         self._validation_icons: List[Tuple[int, int, IssueKind]] = []
 
         self.show_net_labels: bool = True    # toggled via preferences
+        self.show_ratsnest: bool = False     # toggled via toolbar / preferences
         self.show_voltage_labels: bool = True  # toggled via SimPane checkbox
         self.show_binding_posts: bool = True # toggled via preferences
         self.show_baseboard: bool = False    # toggled via preferences
@@ -2060,7 +2062,12 @@ class BreadboardCanvas(wx.Panel):
             sx, sy = self._unrotate_point(*evt.GetPosition())
             for rx, ry, rw, rh, row_net in self._net_label_rows:
                 if rx <= sx <= rx + rw and ry <= sy <= ry + rh:
-                    self._highlight_net_by_name(row_net)
+                    if self._net_hl_name == row_net:
+                        # Clicking the already-highlighted net again turns it off.
+                        self._net_hl_holes = set()
+                        self._net_hl_name  = ''
+                    else:
+                        self._highlight_net_by_name(row_net)
                     self.Refresh()
                     return
             # Fall back to hole proximity (board space)
@@ -3070,6 +3077,7 @@ class BreadboardCanvas(wx.Panel):
         # Legend stays screen-fixed (not baked into the rotated bitmap) so it
         # keeps a constant on-screen position/orientation regardless of view rotation.
         self._draw_net_labels(dc)
+        self._draw_ratsnest_notice(dc)
 
     def _draw_board(self, dc: wx.DC, include_net_labels: bool = True) -> None:
         lay = self.layout
@@ -3103,6 +3111,8 @@ class BreadboardCanvas(wx.Panel):
         self._draw_scope_probes(dc)
 
         if self._ghost:
+            if self.show_ratsnest:
+                self._draw_ratsnest(dc)
             self._draw_ghost(dc)
 
         if self._wire_start:
@@ -3119,6 +3129,7 @@ class BreadboardCanvas(wx.Panel):
         dc.SetDeviceOrigin(0, 0)
         if include_net_labels:
             self._draw_net_labels(dc)
+            self._draw_ratsnest_notice(dc)
 
     def _draw_baseboard(self, dc: wx.DC) -> None:
         lay = self.layout
@@ -5966,6 +5977,151 @@ class BreadboardCanvas(wx.Panel):
                 net_label = net_label[:-2] + '…'
             nlw = dc.GetTextExtent(net_label).Width
             dc.DrawText(net_label, cx - nlw // 2, net_y)
+
+    def _ghost_pin_xy(self) -> Dict[int, Tuple[float, float]]:
+        """Candidate canvas position for each pin of the component currently
+        being placed, given how far the placement gesture has progressed."""
+        ghost = self._ghost
+        if ghost is None:
+            return {}
+        lay = self.layout
+        comp_def = ghost.comp_def
+
+        if comp_def.is_module:
+            mx, my = self._ghost_pos
+            pins = self._compute_module_pins(ghost.ref, comp_def, int(mx), int(my),
+                                             flipped=ghost.flipped)
+            return {pin: xy for (_ref, pin), xy in pins.items()}
+
+        if comp_def.pin_count == 2 and not comp_def.is_dip:
+            # First-click pin number is fixed per type (see _commit_place).
+            first_pin = 2 if comp_def.type_id in ('LED', 'D', 'D_Zener') else 1
+            other_pin = 1 if first_pin == 2 else 2
+            result: Dict[int, Tuple[float, float]] = {}
+            if self._place_pin1 is not None:
+                xy = lay.hole_xy(self._place_pin1)
+                if xy:
+                    result[first_pin] = xy
+                if ghost.anchor is not None:
+                    xy2 = lay.hole_xy(ghost.anchor)
+                    if xy2:
+                        result[other_pin] = xy2
+            elif ghost.anchor is not None:
+                xy = lay.hole_xy(ghost.anchor)
+                if xy:
+                    result[first_pin] = xy
+            return result
+
+        if ghost.anchor is None:
+            return {}
+        try:
+            pin_holes = comp_def.place(ghost.anchor, flipped=ghost.flipped)
+        except (AssertionError, IndexError, KeyError):
+            return {}
+        result = {}
+        for pin, hole in pin_holes.items():
+            xy = lay.hole_xy(hole)
+            if xy:
+                result[pin] = xy
+        return result
+
+    def _draw_ratsnest(self, dc: wx.DC) -> None:
+        """While placing a component, draw thin lines from each of its pins to
+        any already-placed pin sharing the same schematic net — a preview of
+        where this component could be connected, mirroring the PCB editor's
+        ratsnest. Nets that have no resolvable target yet (nothing placed on
+        that net, and no terminal assigned to it) are collected into
+        self._ratsnest_notice so _draw_ratsnest_notice can flag them."""
+        self._ratsnest_notice = ''
+        ghost = self._ghost
+        if ghost is None or self.netlist is None:
+            return
+        ref = ghost.ref
+        pin_xy = self._ghost_pin_xy()
+        if not pin_xy:
+            return
+        nets = self.netlist.nets_for_ref(ref)
+        if not nets:
+            return
+
+        segments = []
+        unresolved_names: List[str] = []
+        seen_net_codes: Set[int] = set()
+        for pin_num, xy in pin_xy.items():
+            net = nets.get(pin_num)
+            if net is None:
+                continue
+            found = False
+            for npin in net.pins:
+                if npin.ref == ref:
+                    continue
+                hole = self.board.hole_for_pin(npin.ref, npin.pin)
+                if hole is None:
+                    continue
+                target_xy = self.layout.hole_xy(hole)
+                if target_xy is None:
+                    continue
+                segments.append((xy, target_xy))
+                found = True
+            # Power/ground nets are connected via a binding-post terminal
+            # (assigned in the sidebar) rather than a placed component pin.
+            for term_name, term_net in self.board.terminal_nets.items():
+                if term_net != net.name:
+                    continue
+                target_xy = self.layout.hole_xy(Terminal(term_name))
+                if target_xy is not None:
+                    segments.append((xy, target_xy))
+                    found = True
+            if not found and net.code not in seen_net_codes:
+                seen_net_codes.add(net.code)
+                unresolved_names.append('GND' if net.name == '0' else net.name)
+
+        if unresolved_names:
+            names = ', '.join(unresolved_names[:3])
+            if len(unresolved_names) > 3:
+                names += f' +{len(unresolved_names) - 3} more'
+            self._ratsnest_notice = f'Ratsnest: {names} not yet placed on board'
+
+        if not segments:
+            return
+
+        # wx.PENSTYLE_DOT is silently dropped by the Cairo backend on a scaled
+        # DC (GTK/Linux) — draw the dashed line via GraphicsContext instead.
+        gc = wx.GraphicsContext.Create(dc)
+        if gc is None:
+            return
+        pen = gc.CreatePen(wx.GraphicsPenInfo(wx.Colour(255, 190, 0, 235))
+                           .Width(1.6).Style(wx.PENSTYLE_SHORT_DASH))
+        gc.SetPen(pen)
+        for (x1, y1), (x2, y2) in segments:
+            path = gc.CreatePath()
+            path.MoveToPoint(x1, y1)
+            path.AddLineToPoint(x2, y2)
+            gc.StrokePath(path)
+
+    def _draw_ratsnest_notice(self, dc: wx.DC) -> None:
+        """Small banner (screen-space) flagging ratsnest nets with no
+        resolvable target on the board yet. Called after the zoom/pan
+        transform is reset."""
+        msg = self._ratsnest_notice
+        if not msg:
+            return
+        font = wx.Font(10, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
+        dc.SetFont(font)
+        tw, th = dc.GetTextExtent(msg)
+
+        PAD_X, PAD_Y = 10, 6
+        box_w = tw + PAD_X * 2
+        box_h = th + PAD_Y * 2
+        cw, _ch = dc.GetSize()
+        bx = (cw - box_w) // 2
+        by = 10
+
+        dc.SetBrush(wx.Brush(wx.Colour(0x80, 0x40, 0x00, 220)))
+        dc.SetPen(wx.Pen(wx.Colour(0xff, 0xb0, 0x30), 1))
+        dc.DrawRoundedRectangle(bx, by, box_w, box_h, 5)
+        dc.SetTextForeground(wx.Colour(0xff, 0xff, 0xff))
+        dc.DrawText(msg, bx + PAD_X, by + PAD_Y)
 
     def _draw_ghost(self, dc: wx.DC) -> None:
         """Draw a semi-transparent component preview at the drag position."""

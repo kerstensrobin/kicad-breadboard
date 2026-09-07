@@ -71,6 +71,7 @@ ID_SIMULATE     = wx.NewIdRef()
 
 # Right vertical toolbar — drawing/editing tool palette (mirrors Eeschema right toolbar)
 ID_NET_HIGHLIGHT = wx.NewIdRef()
+ID_RATSNEST      = wx.NewIdRef()
 ID_NOCONN        = wx.NewIdRef()
 ID_ADD_LABEL     = wx.NewIdRef()
 ID_ADD_GLABEL    = wx.NewIdRef()
@@ -623,10 +624,14 @@ class BreadboardWindow(wx.Frame):
         vt.AddTool(ID_NET_HIGHLIGHT, 'Highlight Net',
                    _kicad_icon('net_highlight_schematic_24.png', _ico),
                    shortHelp='Highlight net — click a hole to show its connections', kind=wx.ITEM_CHECK)
+        vt.AddTool(ID_RATSNEST, 'Ratsnest',
+                   _kicad_icon('general_ratsnest_24.png', _ico),
+                   shortHelp='Show ratsnest lines to matching nets while placing a component',
+                   kind=wx.ITEM_CHECK)
         vt.AddSeparator()
 
         # --- Wiring ---
-        vt.AddTool(ID_WIRE, 'Wire', _kicad_icon('add_line_24.png', _ico),
+        vt.AddTool(ID_WIRE, 'Wire', _local_icon('wire_tool_64.png', _ico),
                    shortHelp='Draw jumper wire  [W]', kind=wx.ITEM_CHECK)
         vt.AddSeparator()
 
@@ -656,6 +661,7 @@ class BreadboardWindow(wx.Frame):
 
         # Reflect initial mode (SELECT)
         vt.ToggleTool(ID_SELECT, True)
+        vt.ToggleTool(ID_RATSNEST, self.prefs.show_ratsnest)
         return vt
 
     def _build_menu(self) -> None:
@@ -745,7 +751,7 @@ class BreadboardWindow(wx.Frame):
         tb.AddTool(ID_SELECT, 'Select', _kicad_icon('cursor_24.png', _ico),
                    shortHelp='Select and move placed components  [Esc]',
                    kind=wx.ITEM_RADIO)
-        tb.AddTool(ID_WIRE, 'Wire', _kicad_icon('add_line_24.png', _ico),
+        tb.AddTool(ID_WIRE, 'Wire', _local_icon('wire_tool_64.png', _ico),
                    shortHelp='Draw a jumper wire between two holes  [W]',
                    kind=wx.ITEM_RADIO)
         tb.AddControl(wx.StaticText(tb, label=' '))
@@ -790,6 +796,7 @@ class BreadboardWindow(wx.Frame):
         self.Bind(wx.EVT_TOOL, self._on_wire,          id=ID_WIRE)
         self.Bind(wx.EVT_TOOL, self._on_delete,        id=ID_DELETE)
         self.Bind(wx.EVT_TOOL, self._on_net_highlight, id=ID_NET_HIGHLIGHT)
+        self.Bind(wx.EVT_TOOL, self._on_ratsnest,      id=ID_RATSNEST)
         self.Bind(wx.EVT_TOOL, self._on_draw_line,     id=ID_DRAW_LINE)
         self.Bind(wx.EVT_TOOL, self._on_draw_rect,     id=ID_DRAW_RECT)
         self.Bind(wx.EVT_TOOL, self._on_draw_circle,   id=ID_DRAW_CIRCLE)
@@ -862,6 +869,12 @@ class BreadboardWindow(wx.Frame):
             self._set_mode(MODE_SELECT)
         else:
             self._set_mode(MODE_NET_HIGHLIGHT)
+
+    def _on_ratsnest(self, evt) -> None:
+        checked = evt.IsChecked()
+        self.canvas.show_ratsnest = checked
+        self.prefs.show_ratsnest = checked
+        self.canvas.Refresh()
 
     def _on_draw_line(self, _evt) -> None:
         if self.canvas.mode == MODE_DRAW_LINE:
@@ -1295,6 +1308,11 @@ class BreadboardWindow(wx.Frame):
         if p.show_net_labels != old.show_net_labels:
             self.canvas.show_net_labels = p.show_net_labels
 
+        # Ratsnest preview while placing components
+        if p.show_ratsnest != old.show_ratsnest:
+            self.canvas.show_ratsnest = p.show_ratsnest
+            self._vtoolbar.ToggleTool(ID_RATSNEST, p.show_ratsnest)
+
         # Binding posts on canvas and sidebar
         if p.show_binding_posts != old.show_binding_posts:
             self.canvas.show_binding_posts = p.show_binding_posts
@@ -1409,6 +1427,7 @@ class BreadboardWindow(wx.Frame):
         """Sync all canvas properties from self.prefs (called once at startup)."""
         p = self.prefs
         self.canvas.show_net_labels    = p.show_net_labels
+        self.canvas.show_ratsnest      = p.show_ratsnest
         self.canvas.show_binding_posts = p.show_binding_posts
         self.canvas.show_baseboard     = p.show_baseboard
         self.canvas.baseboard_color    = p.baseboard_color
@@ -2559,6 +2578,9 @@ class PreferencesDialog(wx.Dialog):
         self._cb_labels = wx.CheckBox(self, label='Show signal labels')
         self._cb_labels.SetValue(prefs.show_net_labels)
         sizer.Add(self._cb_labels, 0, wx.LEFT | wx.TOP | wx.RIGHT, 10)
+        self._cb_ratsnest = wx.CheckBox(self, label='Show ratsnest while placing components')
+        self._cb_ratsnest.SetValue(prefs.show_ratsnest)
+        sizer.Add(self._cb_ratsnest, 0, wx.LEFT | wx.TOP | wx.RIGHT, 10)
         self._cb_hotkeys = wx.CheckBox(self, label='Show hotkey reference panel')
         self._cb_hotkeys.SetValue(prefs.show_hotkeys)
         sizer.Add(self._cb_hotkeys, 0, wx.LEFT | wx.TOP | wx.RIGHT, 10)
@@ -2728,6 +2750,7 @@ class PreferencesDialog(wx.Dialog):
             scope_channels=_sel(self._rb_scope) + 1,
             psu_channels=_sel(self._rb_psu) + 1,
             show_net_labels=self._cb_labels.IsChecked(),
+            show_ratsnest=self._cb_ratsnest.IsChecked(),
             show_hotkeys=self._cb_hotkeys.IsChecked(),
             show_binding_posts=self._cb_binding.IsChecked(),
             num_terminals=_num_terminals,

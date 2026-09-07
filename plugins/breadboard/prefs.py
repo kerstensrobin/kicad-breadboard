@@ -30,6 +30,7 @@ class Preferences:
     scope_channels: int = 2            # number of oscilloscope channels shown (1–4)
     psu_channels: int = 3              # number of PSU channels shown (1, 2, or 3)
     show_net_labels: bool = True       # show signal net labels on the board
+    show_ratsnest: bool = False        # show ratsnest lines while placing a component
     show_binding_posts: bool = True    # draw binding-post terminals on the board
     num_terminals: int = 3             # number of binding-post terminals shown (2, 3, or 4)
     export_format: str = 'png'         # 'png' or 'svg'
