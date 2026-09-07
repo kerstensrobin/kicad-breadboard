@@ -3059,7 +3059,7 @@ class BreadboardCanvas(wx.Panel):
         mdc.Clear()
         mdc.SetUserScale(self._zoom, self._zoom)
         mdc.SetDeviceOrigin(int(self._pan_x), int(self._pan_y))
-        self._draw_board(mdc)
+        self._draw_board(mdc, include_net_labels=False)
         mdc.SelectObject(wx.NullBitmap)
 
         image = bmp.ConvertToImage()
@@ -3067,7 +3067,11 @@ class BreadboardCanvas(wx.Panel):
             image = image.Rotate90(clockwise=True)
         dc.DrawBitmap(wx.Bitmap(image), 0, 0)
 
-    def _draw_board(self, dc: wx.DC) -> None:
+        # Legend stays screen-fixed (not baked into the rotated bitmap) so it
+        # keeps a constant on-screen position/orientation regardless of view rotation.
+        self._draw_net_labels(dc)
+
+    def _draw_board(self, dc: wx.DC, include_net_labels: bool = True) -> None:
         lay = self.layout
 
         if self.show_baseboard:
@@ -3113,7 +3117,8 @@ class BreadboardCanvas(wx.Panel):
         # Legend is drawn in screen coordinates (reset transform first)
         dc.SetUserScale(1.0, 1.0)
         dc.SetDeviceOrigin(0, 0)
-        self._draw_net_labels(dc)
+        if include_net_labels:
+            self._draw_net_labels(dc)
 
     def _draw_baseboard(self, dc: wx.DC) -> None:
         lay = self.layout
