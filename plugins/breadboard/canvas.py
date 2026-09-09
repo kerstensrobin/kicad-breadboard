@@ -1028,6 +1028,55 @@ class CanvasLayout:
 
         return best
 
+    def all_holes(self):
+        """Yield every renderable hole on the current layout (ties, rails,
+        terminals, module pins). Used to search a whole electrical group
+        (via UnionFind) for the geometrically nearest point, rather than a
+        single fixed anchor — e.g. so a ratsnest line can end at the nearest
+        rail hole instead of always at a terminal binding post."""
+        if self.board_layout == 'sunny-11':
+            yield from self._sunny11_all_holes()
+            return
+        for section in range(self.sections):
+            for col in range(1, self.columns + 1):
+                for row in ALL_ROWS:
+                    yield TieHole(col, row, section)
+        if self.has_rails:
+            for section in range(self.sections):
+                for rail in RAIL_NAMES:
+                    for idx in range(1, RAIL_LEN + 1):
+                        yield RailHole(rail, idx, section)
+        for rail in self._vert_rail_cx:
+            for idx in range(1, len(self._vert_hole_y) + 1):
+                yield RailHole(rail, idx)
+        for t_name in TERMINAL_NAMES:
+            yield Terminal(t_name)
+        for ref, pin in self._module_pin_xy:
+            yield ModulePin(ref=ref, pin=pin)
+
+    def _sunny11_all_holes(self):
+        for section in (0, 1):
+            for row in self._s11_row_x:
+                for col in self._s11_col_y:
+                    yield TieHole(col, row, section)
+        for row in self._s11_lower_row_y:
+            for col in self._s11_lower_col_x:
+                yield TieHole(col, row, 2)
+        for section, xs in self._s11_plus_rail_x.items():
+            for idx in range(1, len(xs) + 1):
+                yield RailHole('top_plus', idx, section)
+        for idx in range(1, len(self._s11_minus_top_x) + 1):
+            yield RailHole('sunny_top_minus', idx)
+        for name, xs in self._s11_lower_plus_x.items():
+            for idx in range(1, len(xs) + 1):
+                yield RailHole(name, idx, 2)
+        for idx in range(1, len(self._s11_lower_minus_x) + 1):
+            yield RailHole('sunny_bot_minus', idx)
+        for t_name in TERMINAL_NAMES:
+            yield Terminal(t_name)
+        for ref, pin in self._module_pin_xy:
+            yield ModulePin(ref=ref, pin=pin)
+
 
 # ---------------------------------------------------------------------------
 # Ghost: preview of a component being dragged onto the canvas
@@ -1278,6 +1327,8 @@ class BreadboardCanvas(wx.Panel):
         self._ghost_pos: Tuple[int, int] = (0, 0)    # current mouse pos
         self._place_pin1: Optional[Hole] = None       # locked pin-1 hole for 2-pin two-step placement
         self._ratsnest_notice: str = ''              # set by _draw_ratsnest when a net has no board target yet
+        self._ratsnest_notice_dismissed: str = ''    # message text the user closed via the 'x' — suppressed until it changes
+        self._ratsnest_close_rect: Optional[wx.Rect] = None  # screen-space hit box for the notice's close button
 
         self._selected_ref: Optional[str] = None     # selected placed component
         self._selected_wire: Optional[Wire] = None   # selected wire
@@ -1711,6 +1762,7 @@ class BreadboardCanvas(wx.Panel):
         """Called from the tray when a component card is clicked."""
         self._ghost = DragGhost(comp_def=comp_def, ref=ref)
         self._place_pin1 = None
+        self._ratsnest_notice_dismissed = ''   # allow this placement's own notice to show
         self.SetFocus()   # so key events (Escape) reach the canvas
         self.Refresh()
 
@@ -2018,6 +2070,13 @@ class BreadboardCanvas(wx.Panel):
             evt.Skip()
 
     def _on_left_down(self, evt: wx.MouseEvent) -> None:
+        # Ratsnest notice's close button — screen-space, checked first so it's
+        # clickable even while a placement ghost is active.
+        if self._ratsnest_close_rect is not None \
+                and self._ratsnest_close_rect.Contains(evt.GetPosition()):
+            self._dismiss_ratsnest_notice()
+            return
+
         px, py = self._board_pos(*evt.GetPosition())
 
         # Placement mode: ghost is active — click to place, anywhere to cancel wire
@@ -3105,6 +3164,22 @@ class BreadboardCanvas(wx.Panel):
         self._draw_wires(dc)
         if self._wire_end_drag_wire is not None:
             self._draw_wire_end_drag_preview(dc)
+
+        # Components/wires draw rotated details via short-lived GraphicsContexts
+        # (gc.Translate/gc.Rotate). On MSW, a wxGraphicsContext wraps the DC's
+        # native HDC and applies its matrix directly to it; if the GC's destructor
+        # doesn't restore that matrix before the next paint the DC's transform is
+        # left rotated/translated, so subsequent plain dc.Draw*() calls land in
+        # the wrong place. This mirrors the GTK/Cairo "GC mid-paint corrupts DC
+        # state" issue worked around in _draw_branding — reassert the DC's own
+        # transform here so everything drawn from here on (terminals, probes,
+        # annotations, …) is unaffected by whatever the last component's GC left
+        # behind. Most visible when the view is rotated, since that path paints
+        # onto an off-screen wx.MemoryDC where the stale transform persists
+        # across the whole frame instead of being discarded with the screen DC.
+        dc.SetUserScale(self._zoom, self._zoom)
+        dc.SetDeviceOrigin(int(self._pan_x), int(self._pan_y))
+
         if self.show_binding_posts:
             self._draw_terminals(dc)
         self._draw_probes(dc)
@@ -6025,6 +6100,28 @@ class BreadboardCanvas(wx.Panel):
                 result[pin] = xy
         return result
 
+    def _nearest_reachable_xy(self, uf, anchor: Hole,
+                               from_xy: Tuple[float, float]) -> Optional[Tuple[int, int]]:
+        """Among every hole electrically connected to `anchor` (per the
+        board's UnionFind `uf` — static tie/rail strips plus placed wires),
+        return the canvas position of whichever is geometrically closest to
+        `from_xy`. Mirrors how the PCB editor's ratsnest snaps to the nearest
+        point on an already-existing track rather than the original pad."""
+        root = uf.find(anchor)
+        fx, fy = from_xy
+        best_xy: Optional[Tuple[int, int]] = None
+        best_d: Optional[float] = None
+        for hole in self.layout.all_holes():
+            if uf.find(hole) != root:
+                continue
+            xy = self.layout.hole_xy(hole)
+            if xy is None:
+                continue
+            d = (xy[0] - fx) ** 2 + (xy[1] - fy) ** 2
+            if best_d is None or d < best_d:
+                best_d, best_xy = d, xy
+        return best_xy
+
     def _draw_ratsnest(self, dc: wx.DC) -> None:
         """While placing a component, draw thin lines from each of its pins to
         any already-placed pin sharing the same schematic net — a preview of
@@ -6044,6 +6141,8 @@ class BreadboardCanvas(wx.Panel):
         if not nets:
             return
 
+        uf = self.board.build_connectivity()
+
         segments = []
         unresolved_names: List[str] = []
         seen_net_codes: Set[int] = set()
@@ -6058,7 +6157,12 @@ class BreadboardCanvas(wx.Panel):
                 hole = self.board.hole_for_pin(npin.ref, npin.pin)
                 if hole is None:
                     continue
-                target_xy = self.layout.hole_xy(hole)
+                # That pin may already be wired onward (e.g. into a power
+                # rail) — end the line at whichever point on its electrical
+                # group is geometrically closest, like the PCB editor's
+                # ratsnest snapping to the nearest existing track.
+                target_xy = self._nearest_reachable_xy(uf, hole, xy) \
+                    or self.layout.hole_xy(hole)
                 if target_xy is None:
                     continue
                 segments.append((xy, target_xy))
@@ -6068,7 +6172,9 @@ class BreadboardCanvas(wx.Panel):
             for term_name, term_net in self.board.terminal_nets.items():
                 if term_net != net.name:
                     continue
-                target_xy = self.layout.hole_xy(Terminal(term_name))
+                term_hole = Terminal(term_name)
+                target_xy = self._nearest_reachable_xy(uf, term_hole, xy) \
+                    or self.layout.hole_xy(term_hole)
                 if target_xy is not None:
                     segments.append((xy, target_xy))
                     found = True
@@ -6104,14 +6210,20 @@ class BreadboardCanvas(wx.Panel):
         resolvable target on the board yet. Called after the zoom/pan
         transform is reset."""
         msg = self._ratsnest_notice
-        if not msg:
+        # Only meaningful during an active placement — self._ratsnest_notice
+        # is set by _draw_ratsnest, which does not run once the ghost is
+        # cleared, so without this guard a stale message would linger on
+        # screen indefinitely after placement finishes.
+        if self._ghost is None or not msg or msg == self._ratsnest_notice_dismissed:
+            self._ratsnest_close_rect = None
             return
         font = wx.Font(10, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
         dc.SetFont(font)
         tw, th = dc.GetTextExtent(msg)
 
         PAD_X, PAD_Y = 10, 6
-        box_w = tw + PAD_X * 2
+        CLOSE_GAP, CLOSE_W = 6, 14   # space + width reserved for the 'x' button
+        box_w = tw + PAD_X * 2 + CLOSE_GAP + CLOSE_W
         box_h = th + PAD_Y * 2
         cw, _ch = dc.GetSize()
         bx = (cw - box_w) // 2
@@ -6122,6 +6234,22 @@ class BreadboardCanvas(wx.Panel):
         dc.DrawRoundedRectangle(bx, by, box_w, box_h, 5)
         dc.SetTextForeground(wx.Colour(0xff, 0xff, 0xff))
         dc.DrawText(msg, bx + PAD_X, by + PAD_Y)
+
+        # Close ('x') button, right-aligned inside the box
+        cx0 = bx + box_w - PAD_X - CLOSE_W
+        cy0 = by
+        close_rect = wx.Rect(cx0, cy0, CLOSE_W + PAD_X, box_h)
+        self._ratsnest_close_rect = close_rect
+        mx, my = cx0 + CLOSE_W // 2, by + box_h // 2
+        r = 4
+        dc.SetPen(wx.Pen(wx.Colour(0xff, 0xe0, 0xb0), 2))
+        dc.DrawLine(mx - r, my - r, mx + r, my + r)
+        dc.DrawLine(mx - r, my + r, mx + r, my - r)
+
+    def _dismiss_ratsnest_notice(self) -> None:
+        self._ratsnest_notice_dismissed = self._ratsnest_notice
+        self._ratsnest_close_rect = None
+        self.Refresh()
 
     def _draw_ghost(self, dc: wx.DC) -> None:
         """Draw a semi-transparent component preview at the drag position."""

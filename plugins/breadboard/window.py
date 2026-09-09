@@ -41,7 +41,7 @@ from .model import (
     TERMINAL_NAMES,
 )
 
-PLUGIN_VERSION = '1.1.3'
+PLUGIN_VERSION = '1.2.0'
 REPO           = 'kerstensrobin/kicad-breadboard'
 
 # Toolbar button IDs
@@ -340,7 +340,7 @@ class BreadboardWindow(wx.Frame):
         comp_label = wx.StaticText(left_panel, label='Components')
         comp_label.SetFont(wx.Font(9, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL,
                                    wx.FONTWEIGHT_BOLD))
-        self._pin_fn_cb = wx.CheckBox(left_panel, label='Pin functions')
+        self._pin_fn_cb = wx.CheckBox(left_panel, label='IC pin functions')
         self._pin_fn_cb.SetFont(wx.Font(8, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL,
                                         wx.FONTWEIGHT_NORMAL))
         self._pin_fn_cb.SetToolTip(

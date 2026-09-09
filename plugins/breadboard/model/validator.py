@@ -324,29 +324,37 @@ def validate(board: Breadboard, netlist: Netlist) -> ValidationResult:
 
     # Step 3 — open nets
     # Require at least 2 total endpoints (placed component pins + assigned terminals);
-    # single-endpoint label-only nets are intentionally exempt.
-    # Exception: if the schematic has ≥2 nodes for a net but only 1 is placed
-    # (e.g. a DIP power pin whose other endpoint is a SPICE source), flag it so
-    # the student knows they must assign a binding-post terminal for that net.
+    # single-endpoint label-only nets are intentionally exempt. Supply nets are
+    # checked separately first (see below) since they need a terminal even when
+    # 2+ component pins are already tied together on a rail.
     for net_name, holes in net_holes.items():
         comp  = comp_pin_counts.get(net_name, 0)
         term  = terminal_pin_counts.get(net_name, 0)
         total = comp + term
+
+        # Power/ground nets typically include a virtual node in the schematic
+        # (a power symbol or SPICE source) that has no board placement of its
+        # own — the student must instead assign a binding-post terminal to
+        # stand in for it. Check this before the "total < 2" short-circuit
+        # below: two or more component pins on the same supply net (e.g. two
+        # ICs sharing a rail) are mutually connected to *each other*, which
+        # would otherwise make the net look fully connected even though the
+        # rail was never actually tied to a terminal/power source.
+        if (net_name in power_in_nets and term == 0
+                and schematic_node_counts.get(net_name, 0) > comp):
+            result.issues.append(ValidationIssue(
+                kind=IssueKind.OPEN_NET,
+                net_name=net_name,
+                description=(
+                    f"Net '{net_name}' has component pins but no supply terminal "
+                    f"assigned. Use the binding-post dropdown to assign a terminal "
+                    f"to this net, then connect it on the board."
+                ),
+                holes=holes,
+            ))
+            continue
+
         if total < 2:
-            if (comp >= 1 and term == 0
-                    and schematic_node_counts.get(net_name, 0) >= 2
-                    and net_name in power_in_nets):
-                # Supply net with unplaced second endpoint and no terminal assigned
-                result.issues.append(ValidationIssue(
-                    kind=IssueKind.OPEN_NET,
-                    net_name=net_name,
-                    description=(
-                        f"Net '{net_name}' has component pins but no supply terminal "
-                        f"assigned. Use the binding-post dropdown to assign a terminal "
-                        f"to this net, then connect it on the board."
-                    ),
-                    holes=holes,
-                ))
             continue
         roots = {uf.find(h) for h in holes}
         if len(roots) > 1:
