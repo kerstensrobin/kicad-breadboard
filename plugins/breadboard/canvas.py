@@ -3196,10 +3196,39 @@ class BreadboardCanvas(wx.Panel):
         _paint_debug('after _draw_board (no exception)')
         mdc.SelectObject(wx.NullBitmap)
 
-        image = bmp.ConvertToImage()
-        for _ in range(self._view_rotation // 90):
-            image = image.Rotate90(clockwise=True)
-        dc.DrawBitmap(wx.Bitmap(image), 0, 0)
+        # Rotate the rendered bitmap onto the screen DC via an affine
+        # transform rather than wx.Image.Rotate90() (a CPU-side per-pixel
+        # copy). Diagnostics confirmed the off-screen bitmap's pixel data is
+        # correct at draw time — brush/pen colors read back exactly as set —
+        # so a bug surviving into the visible result has to be in this
+        # rotate/blit step. Rotate90() implementations have a history of
+        # edge/stride bugs on some Windows/wx builds, and the binding posts
+        # sit close to the edge of the logical canvas — exactly where such a
+        # bug would show up while leaving the much larger central board
+        # content untouched, matching what was reported. GraphicsContext's
+        # Translate+Rotate+DrawBitmap draws the whole bitmap as one
+        # hardware/GDI+-accelerated affine blit instead, with no per-pixel
+        # CPU copy to have an edge case in.
+        turns = (self._view_rotation // 90) % 4
+        gc = _make_gc(dc)
+        if gc is not None:
+            angle, tx, ty = {
+                0: (0.0, 0, 0),
+                1: (math.pi / 2, lh - 1, 0),
+                2: (math.pi, lw - 1, lh - 1),
+                3: (3 * math.pi / 2, 0, lw - 1),
+            }[turns]
+            gc.PushState()
+            gc.Translate(tx, ty)
+            gc.Rotate(angle)
+            gc.DrawBitmap(bmp, 0, 0, lw, lh)
+            gc.PopState()
+        else:
+            # Fallback for DCs that don't support GraphicsContext.
+            image = bmp.ConvertToImage()
+            for _ in range(turns):
+                image = image.Rotate90(clockwise=True)
+            dc.DrawBitmap(wx.Bitmap(image), 0, 0)
 
         # Legend stays screen-fixed (not baked into the rotated bitmap) so it
         # keeps a constant on-screen position/orientation regardless of view rotation.
