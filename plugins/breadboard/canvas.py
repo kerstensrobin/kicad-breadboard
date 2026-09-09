@@ -3195,21 +3195,6 @@ class BreadboardCanvas(wx.Panel):
         if self._wire_end_drag_wire is not None:
             self._draw_wire_end_drag_preview(dc)
 
-        # Components/wires draw rotated details via short-lived GraphicsContexts
-        # (gc.Translate/gc.Rotate). On MSW, a wxGraphicsContext wraps the DC's
-        # native HDC and applies its matrix directly to it; if the GC's destructor
-        # doesn't restore that matrix before the next paint the DC's transform is
-        # left rotated/translated, so subsequent plain dc.Draw*() calls land in
-        # the wrong place. This mirrors the GTK/Cairo "GC mid-paint corrupts DC
-        # state" issue worked around in _draw_branding — reassert the DC's own
-        # transform here so everything drawn from here on (terminals, probes,
-        # annotations, …) is unaffected by whatever the last component's GC left
-        # behind. Most visible when the view is rotated, since that path paints
-        # onto an off-screen wx.MemoryDC where the stale transform persists
-        # across the whole frame instead of being discarded with the screen DC.
-        dc.SetUserScale(self._zoom, self._zoom)
-        dc.SetDeviceOrigin(int(self._pan_x), int(self._pan_y))
-
         if self.show_binding_posts:
             self._draw_terminals(dc)
         self._draw_probes(dc)
