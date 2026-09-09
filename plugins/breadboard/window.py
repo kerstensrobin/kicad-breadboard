@@ -41,7 +41,7 @@ from .model import (
     TERMINAL_NAMES,
 )
 
-PLUGIN_VERSION = '1.2.0'
+PLUGIN_VERSION = '1.2.1'
 REPO           = 'kerstensrobin/kicad-breadboard'
 
 # Toolbar button IDs
@@ -64,7 +64,6 @@ ID_ZOOM_IN      = wx.NewIdRef()
 ID_ZOOM_OUT     = wx.NewIdRef()
 ID_ZOOM_FIT     = wx.NewIdRef()
 ID_ROTATE_VIEW  = wx.NewIdRef()
-ID_EESCHEMA     = wx.NewIdRef()
 ID_UNDO         = wx.NewIdRef()
 ID_REDO         = wx.NewIdRef()
 ID_SIMULATE     = wx.NewIdRef()
@@ -743,8 +742,6 @@ class BreadboardWindow(wx.Frame):
                              else 'update_bbrd_from_sch_64.png')
         tb.AddTool(ID_UPDATE, 'Update', _local_icon(_update_icon_name, _ico),
                    shortHelp='Re-export netlist from .kicad_sch and reload (requires kicad-cli)')
-        tb.AddTool(ID_EESCHEMA, 'Schematic', _kicad_icon('icon_eeschema_24_24.png', _ico),
-                   shortHelp='Open schematic in Eeschema')
         tb.AddSeparator()
 
         # Interaction modes
@@ -778,7 +775,6 @@ class BreadboardWindow(wx.Frame):
 
         tb.EnableTool(ID_UNDO, False)
         tb.EnableTool(ID_REDO, False)
-        tb.EnableTool(ID_EESCHEMA, False)
 
         self.toolbar = tb
 
@@ -806,7 +802,6 @@ class BreadboardWindow(wx.Frame):
         self.Bind(wx.EVT_TOOL, self._on_zoom_out, id=ID_ZOOM_OUT)
         self.Bind(wx.EVT_TOOL, self._on_zoom_fit, id=ID_ZOOM_FIT)
         self.Bind(wx.EVT_TOOL, self._on_rotate_view, id=ID_ROTATE_VIEW)
-        self.Bind(wx.EVT_TOOL, self._on_eeschema, id=ID_EESCHEMA)
         self.Bind(wx.EVT_TOOL, lambda _: self.canvas.undo(), id=ID_UNDO)
         self.Bind(wx.EVT_TOOL, lambda _: self.canvas.redo(), id=ID_REDO)
         self.Bind(wx.EVT_MENU, self._on_prefs,          id=ID_PREFS)
@@ -931,47 +926,6 @@ class BreadboardWindow(wx.Frame):
 
     def _on_rotate_view(self, _evt) -> None:
         self.canvas.rotate_view()
-
-    def _on_eeschema(self, _evt) -> None:
-        import subprocess, shutil, sys
-        sch = find_schematic(self._project_path) if self._project_path else None
-        if not sch:
-            wx.MessageBox(
-                'No schematic (.kicad_sch) found.\nOpen a netlist first to set the project folder.',
-                'Open Schematic', wx.OK | wx.ICON_INFORMATION, self,
-            )
-            return
-
-        # Pass the .kicad_pro project file so eeschema opens within project
-        # context and KiCad's IPC single-instance socket can raise an already-
-        # running window (works on both X11 and Wayland).  Fall back to the
-        # .kicad_sch if no project file exists alongside it.
-        pro = sch.with_suffix('.kicad_pro')
-        target = pro if pro.exists() else sch
-        exe = shutil.which('eeschema') or 'eeschema'
-
-        if sys.platform.startswith('linux'):
-            # Try wmctrl regardless of display server — it works on X11 and
-            # XWayland, and fails gracefully (rc != 0) for native Wayland windows.
-            if shutil.which('wmctrl'):
-                rc = subprocess.call(
-                    ['wmctrl', '-x', '-a', 'eeschema'],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                )
-                if rc == 0:
-                    return
-
-        # On X11 without wmctrl, and on Wayland, KiCad's own IPC single-instance
-        # socket handles focus: if eeschema is already running it raises that window;
-        # otherwise a new instance opens.  Passing the .kicad_pro file is required
-        # for the IPC check to match the correct project instance.
-        try:
-            subprocess.Popen([exe, str(target)])
-        except FileNotFoundError:
-            wx.MessageBox(
-                f'eeschema not found on PATH.\nSchematic: {sch}',
-                'Open Schematic', wx.OK | wx.ICON_ERROR, self,
-            )
 
     def _on_history_change(self, can_undo: bool, can_redo: bool) -> None:
         self.toolbar.EnableTool(ID_UNDO, can_undo)

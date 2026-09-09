@@ -1981,14 +1981,22 @@ class BreadboardCanvas(wx.Panel):
         return cw, ch
 
     def _unrotate_point(self, px: float, py: float) -> Tuple[float, float]:
-        """Map a physical window-pixel point to logical drawing-space pixels."""
+        """Map a physical window-pixel point to logical drawing-space pixels.
+
+        Exact inverse of wx.Image.Rotate90(clockwise=True), which maps a
+        source pixel (x, y) in a w×h image to (h-1-y, x) in the rotated
+        h×w image. Omitting the "-1" (as an earlier version of this method
+        did) is off by one physical pixel per turn — usually invisible, but
+        it nudges hole hit-testing right at a hole/pitch boundary, which can
+        make a click snap to the wrong hole in a rotated view.
+        """
         turns = self._view_rotation // 90
         if not turns:
             return px, py
         w, h = self.GetClientSize()
         x, y = px, py
         for _ in range(turns):
-            x, y = y, w - x
+            x, y = y, w - 1 - x
             w, h = h, w
         return x, y
 
