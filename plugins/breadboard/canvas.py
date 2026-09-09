@@ -604,7 +604,8 @@ class CanvasLayout:
         self._s11_gap_upper = SUNNY11_GAP
         self._s11_gap_block_x = SUNNY11_BLOCK_GAP_X
 
-        post_area_h = TERM_R * 2 + MARGIN * 3
+        post_area_h = TERM_R * 2 + MARGIN * 4  # extra MARGIN so the post's net-assignment
+                                                 # label has clearance above the board body
         minus_y = post_area_h + MARGIN // 2
         plus_y  = minus_y + RAIL_H + 2
         tie_top_y = plus_y + RAIL_H + RAIL_GAP
