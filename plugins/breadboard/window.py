@@ -41,7 +41,7 @@ from .model import (
     TERMINAL_NAMES,
 )
 
-PLUGIN_VERSION = '1.2.4'
+PLUGIN_VERSION = '1.2.5'
 REPO           = 'kerstensrobin/kicad-breadboard'
 
 # Toolbar button IDs
