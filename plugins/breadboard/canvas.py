@@ -3090,8 +3090,7 @@ class BreadboardCanvas(wx.Panel):
         """Render the full board to an off-screen bitmap (for PNG export)."""
         w = self.layout.total_width()
         h = self.layout.total_height
-        bmp = wx.Bitmap(w, h, 32)
-        bmp.UseAlpha()
+        bmp = wx.Bitmap(w, h)
         mdc = wx.MemoryDC(bmp)
         mdc.SetBackground(wx.Brush(wx.SystemSettings.GetColour(wx.SYS_COLOUR_BTNFACE)))
         mdc.Clear()
@@ -3128,15 +3127,16 @@ class BreadboardCanvas(wx.Panel):
         lw, lh = self._logical_client_size()
         if lw <= 0 or lh <= 0:
             return
-        # depth=32 + UseAlpha(): component bodies draw via wx.GraphicsContext
-        # (rotated details), which on MSW binds a Direct2D/GDI+ render target
-        # to the DC. Against a plain non-alpha wx.Bitmap that binding is prone
-        # to silently failing partway through a frame on Windows — drawing
-        # stops (leaving a mostly-background/"white" canvas) with everything
-        # queued after it, including the terminals, never drawn. An
-        # alpha-enabled bitmap is the documented-safe target for GC drawing.
-        bmp = wx.Bitmap(lw, lh, 32)
-        bmp.UseAlpha()
+        # Plain, non-alpha bitmap: most drawing here goes through plain wx.DC
+        # calls (holes, rails, wires, terminals), which on MSW don't reliably
+        # write a meaningful alpha byte. An earlier attempt to fix a Windows
+        # rendering bug made this bitmap alpha-aware (depth=32 + UseAlpha())
+        # on the theory that wx.GraphicsContext-drawn component bodies needed
+        # it — instead it made everything drawn via plain DC calls composite
+        # as transparent against the alpha-aware GC-drawn bodies, i.e. the
+        # opposite failure (everything but components disappearing). Keep
+        # this bitmap fully opaque.
+        bmp = wx.Bitmap(lw, lh)
         mdc = wx.MemoryDC(bmp)
         mdc.SetBackground(wx.Brush(wx.SystemSettings.GetColour(wx.SYS_COLOUR_BTNFACE)))
         mdc.Clear()
