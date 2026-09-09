@@ -46,46 +46,12 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _DEFAULT_BRAND_IMAGE = os.path.join(_HERE, 'resources', 'kicad_bbrd.png')
 
 
-_gc_debug_counts = {'ok': 0, 'none': 0, 'exc': 0}
-
-
 def _make_gc(dc: 'wx.DC') -> 'wx.GraphicsContext | None':
     """Return a GraphicsContext for dc, or None if dc doesn't support it (e.g. SVGFileDC)."""
     try:
-        gc = wx.GraphicsContext.Create(dc)
-    except Exception:
-        _gc_debug_counts['exc'] += 1
-        return None
-    _gc_debug_counts['ok' if gc is not None else 'none'] += 1
-    return gc
-
-
-def _win_gdi_count() -> 'int | None':
-    """Current process's GDI object handle count on Windows, or None elsewhere/
-    on failure. Diagnostic only — used to test whether the rotated-view +
-    components rendering bug (posts/other content rendering blank/white on
-    MSW) is caused by exhausting the per-process GDI object quota."""
-    import sys
-    if not sys.platform.startswith('win'):
-        return None
-    try:
-        import ctypes
-        GR_GDIOBJECTS = 0
-        hproc = ctypes.windll.kernel32.GetCurrentProcess()
-        return ctypes.windll.user32.GetGuiResources(hproc, GR_GDIOBJECTS)
+        return wx.GraphicsContext.Create(dc)
     except Exception:
         return None
-
-
-def _paint_debug(tag: str) -> None:
-    """Print a one-line diagnostic to stderr — visible when run via
-    `python -m plugins.breadboard.standalone` from a terminal. Temporary
-    instrumentation for tracking down a Windows-only rendering bug in the
-    rotated view when components are placed; safe to leave in (cheap, only
-    fires on rotated-view paints) and easy to strip out once diagnosed."""
-    import sys
-    n = _win_gdi_count()
-    print(f'[bbrd-paint] {tag}: gdi_objects={n}', file=sys.stderr, flush=True)
 
 
 def _transparent_brush() -> 'wx.Brush':
@@ -3176,9 +3142,6 @@ class BreadboardCanvas(wx.Panel):
         mdc.Clear()
         mdc.SetUserScale(self._zoom, self._zoom)
         mdc.SetDeviceOrigin(int(self._pan_x), int(self._pan_y))
-        _paint_debug(f'before _draw_board bmp.IsOk={bmp.IsOk()} mdc.IsOk={mdc.IsOk()} '
-                     f'n_components={len(self.board.placements)}')
-        _gc_debug_counts['ok'] = _gc_debug_counts['none'] = _gc_debug_counts['exc'] = 0
         try:
             self._draw_board(mdc, include_net_labels=False)
         except Exception:
@@ -3193,7 +3156,6 @@ class BreadboardCanvas(wx.Panel):
             dc.SetDeviceOrigin(int(self._pan_x), int(self._pan_y))
             self._draw_board(dc)
             return
-        _paint_debug('after _draw_board (no exception)')
         mdc.SelectObject(wx.NullBitmap)
 
         # Rotate the rendered bitmap onto the screen DC via an affine
@@ -3263,9 +3225,6 @@ class BreadboardCanvas(wx.Panel):
             self._draw_wire_end_drag_preview(dc)
 
         if self.show_binding_posts:
-            if self._view_rotation:
-                _paint_debug(f'before _draw_terminals dc.IsOk={dc.IsOk()} '
-                             f'gc_counts={dict(_gc_debug_counts)}')
             self._draw_terminals(dc)
         self._draw_probes(dc)
         self._draw_scope_probes(dc)
@@ -6071,12 +6030,6 @@ class BreadboardCanvas(wx.Panel):
             dc.SetPen(wx.Pen('#ffffff' if assigned else '#111111',
                              3 if assigned else 2))
             dc.DrawCircle(cx, cy, TERM_R)
-            if self._view_rotation and name == 'GND':
-                _paint_debug(
-                    f'terminal GND at ({cx},{cy}) wanted_brush={body_color} '
-                    f'readback_brush={dc.GetBrush().GetColour()} '
-                    f'readback_pen={dc.GetPen().GetColour()} '
-                    f'dc.IsOk={dc.IsOk()}')
 
             # Knurl ticks — short radial lines around the outer rim
             n_ticks = 18
