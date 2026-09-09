@@ -3090,7 +3090,8 @@ class BreadboardCanvas(wx.Panel):
         """Render the full board to an off-screen bitmap (for PNG export)."""
         w = self.layout.total_width()
         h = self.layout.total_height
-        bmp = wx.Bitmap(w, h)
+        bmp = wx.Bitmap(w, h, 32)
+        bmp.UseAlpha()
         mdc = wx.MemoryDC(bmp)
         mdc.SetBackground(wx.Brush(wx.SystemSettings.GetColour(wx.SYS_COLOUR_BTNFACE)))
         mdc.Clear()
@@ -3127,13 +3128,34 @@ class BreadboardCanvas(wx.Panel):
         lw, lh = self._logical_client_size()
         if lw <= 0 or lh <= 0:
             return
-        bmp = wx.Bitmap(lw, lh)
+        # depth=32 + UseAlpha(): component bodies draw via wx.GraphicsContext
+        # (rotated details), which on MSW binds a Direct2D/GDI+ render target
+        # to the DC. Against a plain non-alpha wx.Bitmap that binding is prone
+        # to silently failing partway through a frame on Windows — drawing
+        # stops (leaving a mostly-background/"white" canvas) with everything
+        # queued after it, including the terminals, never drawn. An
+        # alpha-enabled bitmap is the documented-safe target for GC drawing.
+        bmp = wx.Bitmap(lw, lh, 32)
+        bmp.UseAlpha()
         mdc = wx.MemoryDC(bmp)
         mdc.SetBackground(wx.Brush(wx.SystemSettings.GetColour(wx.SYS_COLOUR_BTNFACE)))
         mdc.Clear()
         mdc.SetUserScale(self._zoom, self._zoom)
         mdc.SetDeviceOrigin(int(self._pan_x), int(self._pan_y))
-        self._draw_board(mdc, include_net_labels=False)
+        try:
+            self._draw_board(mdc, include_net_labels=False)
+        except Exception:
+            # Don't let a failed rotated-frame render silently blank the
+            # canvas — log it (visible in the standalone console / KiCad's
+            # scripting console) and fall back to an unrotated draw so the
+            # board is still usable while this gets diagnosed.
+            import traceback
+            traceback.print_exc()
+            mdc.SelectObject(wx.NullBitmap)
+            dc.SetUserScale(self._zoom, self._zoom)
+            dc.SetDeviceOrigin(int(self._pan_x), int(self._pan_y))
+            self._draw_board(dc)
+            return
         mdc.SelectObject(wx.NullBitmap)
 
         image = bmp.ConvertToImage()
