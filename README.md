@@ -13,11 +13,11 @@ A KiCad 9 / 10 plugin for introductory analog electronics courses at the Univers
 
 ## v1.2 highlights
 
-- **New board: Sunny-11** — a dual-rail portrait-style layout (two portrait tie-blocks side by side over a landscape block), with its own independent V1–V4 supply rails and 5 binding posts; DIP ICs can straddle any of its three gutters, not just one
-- **Rotate the view** — a toolbar button rotates the whole canvas in 90° steps, so you can inspect wiring from any orientation without touching the underlying layout
-- **Ratsnest preview** — while placing a component or drawing a wire, dashed hint lines point from each pin to every other pin still waiting on the same schematic net, so the next connection is never a guess
-- **Component rotation reworked** — single-bank multi-pin parts (BJTs, JFETs, MOSFETs, sliders, potentiometers) now rotate in proper 4-way 90° steps instead of a single mirror-flip
-- **Broader, more reliable component detection** — transistors are recognised even when their KiCad description has no "NPN"/"PNP" wording (e.g. BD140), and pin order is corrected automatically for parts whose schematic numbering isn't the default C-B-E, so nothing silently disappears from the tray or gets wired to the wrong hole
+- **New board: Sunny-11**: a dual-rail portrait-style layout (two portrait tie-blocks side by side over a landscape block), with its own independent V1–V4 supply rails and 5 binding posts; DIP ICs can straddle any of its three gutters, not just one
+- **Rotate the view**: a toolbar button rotates the whole canvas in 90° steps, so you can inspect wiring from any orientation without touching the underlying layout
+- **Ratsnest preview**: while placing a component or drawing a wire, dashed hint lines point from each pin to every other pin still waiting on the same schematic net, so the next connection is never a guess
+- **Component rotation reworked**: single-bank multi-pin parts (BJTs, JFETs, MOSFETs, sliders, potentiometers) now rotate in proper 4-way 90° steps instead of a single mirror-flip
+- **Broader, more reliable component detection**: transistors are recognised even when their KiCad description has no "NPN"/"PNP" wording (e.g. BD140), and pin order is corrected automatically for parts whose schematic numbering isn't the default C-B-E, so nothing silently disappears from the tray or gets wired to the wrong hole
 - Net highlighting, validation, and wire/placement interactions received a long list of bug fixes: stale binding-post state on the rotated view, dismissible ratsnest notices, a missing-supply-terminal validator check, and more
 - Cross-platform rendering fixes for Windows: a GDI+ hairline-pen bug that distorted diode/LED cathode markings under rotation, and a `wx.Image.Rotate90()` edge bug in the rotated view, both replaced with GraphicsContext-based rendering
 
