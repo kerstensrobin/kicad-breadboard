@@ -11,7 +11,7 @@ A KiCad 9 / 10 plugin for introductory analog electronics courses at the Univers
 
 
 
-## v1.2.x highlights
+## v1.2 highlights
 
 - **New board: Sunny-11** — a dual-rail portrait-style layout (two portrait tie-blocks side by side over a landscape block), with its own independent V1–V4 supply rails and 5 binding posts; DIP ICs can straddle any of its three gutters, not just one
 - **Rotate the view** — a toolbar button rotates the whole canvas in 90° steps, so you can inspect wiring from any orientation without touching the underlying layout
@@ -21,7 +21,7 @@ A KiCad 9 / 10 plugin for introductory analog electronics courses at the Univers
 - Net highlighting, validation, and wire/placement interactions received a long list of bug fixes: stale binding-post state on the rotated view, dismissible ratsnest notices, a missing-supply-terminal validator check, and more
 - Cross-platform rendering fixes for Windows: a GDI+ hairline-pen bug that distorted diode/LED cathode markings under rotation, and a `wx.Image.Rotate90()` edge bug in the rotated view, both replaced with GraphicsContext-based rendering
 
-## v1.1.x highlights
+## v1.1 highlights
 
 - Graphical overhaul with refreshed toolbar/menu icons, improved component rendering, and clearer side panels
 - Drawing annotations: add lines, rectangles, circles, text, and text boxes directly on the breadboard
@@ -392,4 +392,4 @@ This passes your shell environment (including `PATH`) to KiCad and the plugin wi
 
 ---
 
-Made with ♥ by [nacho.works](https://nacho.works) and [University of Antwerp](https://www.uantwerpen.be/en/), Belgium.
+Made with ♥ by [nacho.works](https://nacho.works) and [University of Antwerp](https://www.uantwerpen.be/en/about-uantwerp/faculties/faculty-of-applied-engineering/), Belgium.
