@@ -803,9 +803,56 @@ for _n in [4, 6, 8, 10, 12, 14, 16, 18, 20, 24, 28, 40]:
     _d = _make_dip(_n)
     ALL_DEFS[_d.type_id] = _d
 
+# Physical left-to-right pin order NPN_BJT/PNP_BJT's pin_offsets assume
+# (see the "TO-92 transistors" comment above): C-B-E.
+_BJT_CANONICAL_ORDER = ('C', 'B', 'E')
+
+
+def _parse_sim_pins(raw: str) -> Dict[int, str]:
+    """Parse a KiCad Sim.Pins string like '1=E 2=C 3=B' into {pin_num: func}."""
+    result: Dict[int, str] = {}
+    for token in raw.split():
+        num, _, func = token.partition('=')
+        try:
+            result[int(num)] = func.strip().upper()
+        except ValueError:
+            continue
+    return result
+
+
+def _bjt_type_id(base_type: str, sim_pins: str) -> str:
+    """Resolve the NPN/PNP type_id for a specific symbol, correcting for pin
+    order when its Sim.Pins field says its schematic pin numbering isn't the
+    C-B-E order NPN_BJT/PNP_BJT assume. KiCad's Transistor_BJT library names
+    its generic base symbols with the order baked into the suffix (Q_NPN_BCE,
+    Q_PNP_ECB, Q_NPN_Darlington_EBC, …), and every specific part (BD140,
+    TIP31, 2N3906, …) inherits that base's numbering — so without this,
+    parts built on a non-CBE base would land in the right ComponentDef but
+    with pins wired to the wrong physical hole."""
+    mapping = _parse_sim_pins(sim_pins)
+    if set(mapping.keys()) != {1, 2, 3} or set(mapping.values()) != set(_BJT_CANONICAL_ORDER):
+        return base_type
+    order = tuple(mapping[i] for i in (1, 2, 3))
+    if order == _BJT_CANONICAL_ORDER:
+        return base_type
+    type_id = f'{base_type}_{"".join(order)}'
+    if type_id not in ALL_DEFS:
+        base_def = ALL_DEFS[base_type]
+        ALL_DEFS[type_id] = ComponentDef(
+            type_id=type_id,
+            display_name=f'{base_def.display_name} ({"".join(order)})',
+            ref_prefix='Q',
+            pin_offsets={pin: PinOffset(_BJT_CANONICAL_ORDER.index(func))
+                         for pin, func in mapping.items()},
+            pin_names=mapping,
+            color=base_def.color,
+        )
+    return type_id
+
 
 def guess_type_id(ref: str, value: str, symbol: str, lib: str = '',
-                  description: str = '', pin_count: int = 0) -> Optional[str]:
+                  description: str = '', pin_count: int = 0,
+                  properties: Optional[Dict[str, str]] = None) -> Optional[str]:
     """
     Heuristically map a KiCad component to a ComponentDef type_id.
 
@@ -814,11 +861,18 @@ def guess_type_id(ref: str, value: str, symbol: str, lib: str = '',
     symbol      : KiCad symbol name from the netlist libsource, e.g. 'R', 'NPN', 'TL081'
     lib         : KiCad library name from the netlist libsource, e.g. 'Device', 'Simulation_SPICE'
     description : libsource description, e.g. '0.1A Id, 60V Vds, N-Channel MOSFET, TO-92'
+    properties  : netlist <property> fields, e.g. {'Sim.Device': 'PNP'} — real part
+                  symbols in KiCad's Transistor_BJT library (BD140, TIP31, 2N3906, …)
+                  inherit this field from their generic Q_NPN_*/Q_PNP_* base symbol
+                  even when their own description text has no NPN/PNP wording
+                  (e.g. BD140's description is just "..., Low Voltage Transistor, TO-126").
     """
     v = value.upper()
     s = symbol.upper()
     l = lib.upper()
     d = description.upper()
+    sim_device = (properties or {}).get('Sim.Device', '').upper()
+    sim_pins = (properties or {}).get('Sim.Pins', '')
 
     # Board modules — all KiCad variants map to a single standard layout.
     # Arduino Uno R3: 32-pin symbol; symbol name contains "UNO".
@@ -860,9 +914,9 @@ def guess_type_id(ref: str, value: str, symbol: str, lib: str = '',
 
     # Transistor types from symbol library name
     if 'NPN' in s:
-        return 'NPN'
+        return _bjt_type_id('NPN', sim_pins)
     if 'PNP' in s:
-        return 'PNP'
+        return _bjt_type_id('PNP', sim_pins)
     if 'PJFE' in s or ('JFET' in s and 'P' in s):
         return 'JFET_P'
     if 'JFET' in s or 'NJFE' in s:
@@ -871,6 +925,14 @@ def guess_type_id(ref: str, value: str, symbol: str, lib: str = '',
         return 'PMOS'
     if 'NMOS' in s or 'MOSFET' in s:
         return 'NMOS'
+
+    # Sim.Device field — real Transistor_BJT library parts (BD140, TIP31,
+    # 2N3906, …) inherit this from their generic base symbol regardless of
+    # whether their own description text spells out the polarity.
+    if sim_device == 'NPN':
+        return _bjt_type_id('NPN', sim_pins)
+    if sim_device == 'PNP':
+        return _bjt_type_id('PNP', sim_pins)
 
     # Switch symbols — must precede prefix fallback (SW_ prefix would default to SPST)
     if 'SW_PUSH' in s or 'PUSHBUTTON' in s or 'TACTILE' in s or 'TACT' in s:
@@ -935,9 +997,9 @@ def guess_type_id(ref: str, value: str, symbol: str, lib: str = '',
     # Description-based fallback: works for Transistor_BJT / Transistor_FET library
     # parts whose symbol name is the part number (2N2219, BC807, 2N7002, AO3401A…).
     if 'NPN' in d and 'TRANSISTOR' in d:
-        return 'NPN'
+        return _bjt_type_id('NPN', sim_pins)
     if 'PNP' in d and 'TRANSISTOR' in d:
-        return 'PNP'
+        return _bjt_type_id('PNP', sim_pins)
     if 'P-CHANNEL' in d and 'MOSFET' in d:
         return 'PMOS'
     if ('N-CHANNEL' in d or 'N-CH' in d) and 'MOSFET' in d:

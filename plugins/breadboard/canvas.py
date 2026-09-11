@@ -58,6 +58,17 @@ def _transparent_brush() -> 'wx.Brush':
     return wx.Brush(wx.Colour(0, 0, 0, 0), wx.BRUSHSTYLE_TRANSPARENT)
 
 
+_TO92_BASE_TYPES = frozenset({'NPN', 'PNP', 'JFET_N', 'JFET_P', 'BS170', 'NMOS', 'PMOS'})
+
+
+def _is_to92_type(type_id: str) -> bool:
+    """True for TO-92-style 3-pin parts, including per-symbol pin-order
+    variants dynamically registered by guess_type_id's _bjt_type_id (e.g.
+    'PNP_ECB' for a part whose schematic pin numbering isn't C-B-E) — those
+    still render as the same TO-92 body as their 'NPN'/'PNP' base."""
+    return type_id in _TO92_BASE_TYPES or type_id.startswith(('NPN_', 'PNP_'))
+
+
 def _parse_svg_size(path: str):
     """Return (width, height) from SVG viewBox attribute, or (100.0, 100.0) as fallback."""
     import re
@@ -2564,14 +2575,21 @@ class BreadboardCanvas(wx.Panel):
         """Cross-gap pin placement for a DIP anchored on sunny-11's upper
         blocks: straddle whichever of the three gutters is nearest the
         clicked hole, instead of always forcing row 'e' (which can only
-        ever reach one of the two blocks' own internal gaps)."""
+        ever reach one of the two blocks' own internal gaps).
+
+        The row->x / col->y axis swap in _init_sunny11 (portrait blocks) is a
+        transpose of the normal board's col->x / row->y mapping, and a plain
+        transpose is a mirror image, not a 90° rotation — reusing col_delta's
+        sign unchanged here would reflect the pin order instead of rotating
+        it, so col_delta is negated relative to comp_def.place()'s formula
+        to restore proper rotation and correct pin-1 placement."""
         false_side, true_side = self._SUNNY11_GUTTERS[
             self._sunny11_gutter_index(anchor.row, anchor.section)]
         result: Dict[int, Hole] = {}
         for pin, offset in comp_def.pin_offsets.items():
             cross = (not offset.cross_gap) if flipped else offset.cross_gap
             row, section = true_side if cross else false_side
-            col = anchor.col + (-offset.col_delta if flipped else offset.col_delta)
+            col = anchor.col + (offset.col_delta if flipped else -offset.col_delta)
             try:
                 result[pin] = TieHole(col, row, section)
             except AssertionError:
@@ -3006,8 +3024,15 @@ class BreadboardCanvas(wx.Panel):
         new_flipped = not placed.flipped
         if comp_def.is_dip:
             n = comp_def.footprint_cols() - 1
-            new_col = pin1.col + (n if new_flipped else -n)
-            if self.layout.board_layout == 'sunny-11' and pin1.section in (0, 1):
+            is_sunny11_upper = (self.layout.board_layout == 'sunny-11'
+                                 and pin1.section in (0, 1))
+            if is_sunny11_upper:
+                # _sunny11_place_dip negates col_delta's sign relative to
+                # comp_def.place() (see its docstring), so the anchor offset
+                # that keeps the footprint in place across a flip is also
+                # negated here — otherwise the IC jumps to a different span
+                # of columns instead of flipping in place.
+                new_col = pin1.col + (-n if new_flipped else n)
                 # Keep straddling the same gutter pin1 is already on, rather
                 # than assuming row 'e' of the same section (only true for
                 # the two blocks' own internal gutters, not the middle one).
@@ -3015,6 +3040,7 @@ class BreadboardCanvas(wx.Panel):
                     self._sunny11_gutter_index(pin1.row, pin1.section)][0]
                 new_anchor = TieHole(new_col, false_row, false_section)
             else:
+                new_col = pin1.col + (n if new_flipped else -n)
                 new_anchor = TieHole(new_col, 'e', pin1.section)
         elif comp_def.pin_count == 2:
             # For 2-pin axial: use pin2 as new anchor and toggle flipped.
@@ -4339,7 +4365,6 @@ class BreadboardCanvas(wx.Panel):
         else:
             # 3-pin and 4-pin components
             _SLIDER_TYPES = frozenset({'SPDT', 'SP3T'})
-            _TO92_TYPES = frozenset({'NPN', 'PNP', 'JFET_N', 'JFET_P', 'BS170', 'NMOS', 'PMOS'})
             if placed.type_id in _SLIDER_TYPES:
                 # See _draw_slider_switch / TO-92's comment above: axis and
                 # side are derived from `flipped` + the real resolved pixel
@@ -4350,7 +4375,7 @@ class BreadboardCanvas(wx.Panel):
                 self._draw_slider_switch(dc, comp_def, placed, ref,
                                          x_min, x_max, y_min, y_max, primary, horiz, selected)
                 return
-            elif placed.type_id in _TO92_TYPES:
+            elif _is_to92_type(placed.type_id):
                 # Ammo-pack style TO-92: small D-shaped body elevated above holes,
                 # three thin wire leads sticking out to each pin hole.
                 #
@@ -6454,7 +6479,12 @@ class BreadboardCanvas(wx.Panel):
         gc = wx.GraphicsContext.Create(dc)
         if gc is None:
             return
-        pen = gc.CreatePen(wx.GraphicsPenInfo(wx.Colour(255, 190, 0, 235))
+        # Was amber (255,190,0) — too close in hue to the board's cream/yellow
+        # surface (#e8e0c8) to read clearly. Electric blue-violet sits on the
+        # opposite side of the color wheel from that yellow, so it stays
+        # legible against the board and doesn't collide with any WIRE_COLORS
+        # entry (avoids being mistaken for an actual placed wire).
+        pen = gc.CreatePen(wx.GraphicsPenInfo(wx.Colour(60, 70, 255, 235))
                            .Width(1.6).Style(wx.PENSTYLE_SHORT_DASH))
         gc.SetPen(pen)
         for (x1, y1), (x2, y2) in segments:
@@ -6661,6 +6691,13 @@ class BreadboardCanvas(wx.Panel):
             pin_holes = self._resolve_pin_holes(comp_def, ghost.anchor, ghost.flipped)
         except (AssertionError, IndexError, KeyError):
             return
+        if not self._pin_holes_valid(pin_holes):
+            # A pin would land off the edge of the board (e.g. dragging a
+            # wide DIP toward the end of sunny-11's narrow 28-column blocks).
+            # Drawing only the pins that still fit would render a shrunken
+            # body that looks like a smaller IC (DIP16 reading as DIP6/4/2)
+            # instead of signalling that the component won't fit here.
+            return
 
         holes_xy = [lay.hole_xy(h) for h in pin_holes.values()]
         holes_xy = [xy for xy in holes_xy if xy is not None]
@@ -6669,7 +6706,6 @@ class BreadboardCanvas(wx.Panel):
         xs = [xy[0] for xy in holes_xy]
         ys = [xy[1] for xy in holes_xy]
 
-        _TO92_TYPES    = frozenset({'NPN', 'PNP', 'JFET_N', 'JFET_P', 'BS170', 'NMOS', 'PMOS'})
         _SLIDER_TYPES  = frozenset({'SPDT', 'SP3T'})
         base_color = wx.Colour(comp_def.color)
         r0, g0, b0 = base_color.Red(), base_color.Green(), base_color.Blue()
@@ -6730,7 +6766,7 @@ class BreadboardCanvas(wx.Panel):
                     face_left_g, body_top_g + FACE_INS_G,
                     float(FACE_H_G), body_h_g - 2 * FACE_INS_G, 2.0)
 
-        elif comp_def.type_id in _TO92_TYPES:
+        elif _is_to92_type(comp_def.type_id):
             # Ammo-pack ghost for TO-92 — mirrors _draw_placed_component's TO-92
             # branch (see there for the rotation rationale): axis is measured
             # from the real resolved pixel spread, not inferred from `flipped`,
