@@ -404,21 +404,50 @@ def _external_model_conflicts(board: 'Breadboard', netlist: 'Netlist') -> List[s
     return conflicts
 
 
-def _bjt_element_line(ref: str, type_id: str, p, model_name: str) -> Optional[str]:
-    """SPICE Q-element for an NPN/PNP part, looking up which schematic pin
-    number is C/B/E from the ComponentDef's pin_names rather than assuming
-    1=C/2=B/3=E — needed for parts whose symbol numbers pins in a different
-    order (e.g. BD140's Q_PNP_ECB base numbers them 1=E/2=C/3=B), which
-    guess_type_id's _bjt_type_id registers as a distinct type_id ('PNP_ECB')
-    with pin_names corrected to match."""
+def _pin_nums_for(type_id: str, *funcs: str) -> Optional[Tuple[int, ...]]:
+    """Look up which schematic pin number carries each named function (e.g.
+    'C'/'B'/'E' or 'D'/'G'/'S') from the ComponentDef's pin_names, instead of
+    assuming fixed positions — needed for parts whose symbol numbers pins in
+    a different order than the base ComponentDef assumes (e.g. BD140's
+    Q_PNP_ECB base numbers them 1=E/2=C/3=B, or a Simulation_SPICE NJFET
+    declaring "1=D 2=G 3=S" directly), which guess_type_id's
+    _pin_order_type_id registers as a distinct type_id ('PNP_ECB',
+    'JFET_N_DGS', …) with pin_names corrected to match."""
     comp_def = ALL_DEFS.get(type_id)
     if comp_def is None:
         return None
     pin_of = {name: num for num, name in comp_def.pin_names.items()}
-    c, b, e = pin_of.get('C'), pin_of.get('B'), pin_of.get('E')
-    if c is None or b is None or e is None:
+    try:
+        return tuple(pin_of[f] for f in funcs)
+    except KeyError:
         return None
+
+
+def _bjt_element_line(ref: str, type_id: str, p, model_name: str) -> Optional[str]:
+    """SPICE Q-element: Q<ref> <collector> <base> <emitter> <model>."""
+    nums = _pin_nums_for(type_id, 'C', 'B', 'E')
+    if nums is None:
+        return None
+    c, b, e = nums
     return f'Q{ref}  {p(c)}  {p(b)}  {p(e)}  {model_name}'
+
+
+def _jfet_element_line(ref: str, type_id: str, p, model_name: str) -> Optional[str]:
+    """SPICE J-element: J<ref> <drain> <gate> <source> <model>."""
+    nums = _pin_nums_for(type_id, 'D', 'G', 'S')
+    if nums is None:
+        return None
+    d, g, s = nums
+    return f'J{ref}  {p(d)}  {p(g)}  {p(s)}  {model_name}'
+
+
+def _mosfet_element_line(ref: str, type_id: str, p, model_name: str) -> Optional[str]:
+    """SPICE M-element: M<ref> <drain> <gate> <source> <bulk> <model>."""
+    nums = _pin_nums_for(type_id, 'D', 'G', 'S')
+    if nums is None:
+        return None
+    d, g, s = nums
+    return f'M{ref}  {p(d)}  {p(g)}  {p(s)}  0  {model_name}'
 
 
 def _element_line(ref: str, type_id: str,
@@ -460,19 +489,17 @@ def _element_line(ref: str, type_id: str,
     if tid == 'PNP' or tid.startswith('PNP_'):
         return _bjt_element_line(ref, tid, p, 'QPNP')
 
-    if tid == 'JFET_N':
-        # pin1=S, pin2=G, pin3=D  →  SPICE J: drain gate source model
-        return f'J{ref}  {p(3)}  {p(2)}  {p(1)}  JFET_N'
+    if tid == 'JFET_N' or tid.startswith('JFET_N_'):
+        return _jfet_element_line(ref, tid, p, 'JFET_N')
 
-    if tid == 'JFET_P':
-        return f'J{ref}  {p(3)}  {p(2)}  {p(1)}  JFET_P'
+    if tid == 'JFET_P' or tid.startswith('JFET_P_'):
+        return _jfet_element_line(ref, tid, p, 'JFET_P')
 
-    if tid in ('NMOS', 'BS170'):
-        # pin1=G, pin2=S, pin3=D  →  SPICE M: drain gate source bulk model
-        return f'M{ref}  {p(3)}  {p(1)}  {p(2)}  0  NMOS'
+    if tid in ('NMOS', 'BS170') or tid.startswith('NMOS_'):
+        return _mosfet_element_line(ref, tid, p, 'NMOS')
 
-    if tid == 'PMOS':
-        return f'M{ref}  {p(3)}  {p(1)}  {p(2)}  0  PMOS'
+    if tid == 'PMOS' or tid.startswith('PMOS_'):
+        return _mosfet_element_line(ref, tid, p, 'PMOS')
 
     if tid == 'POT':
         # Model as two equal resistors at 50% wiper position
