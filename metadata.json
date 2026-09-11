@@ -25,8 +25,17 @@
   },
   "versions": [
     {
-      "version": "1.2.20",
+      "version": "1.2.21",
       "status": "stable",
+      "kicad_version": "9.0",
+      "download_url": "https://github.com/kerstensrobin/kicad-breadboard/releases/download/v1.2.21/kicad-breadboard-1.2.21.zip",
+      "download_sha256": "cc549725df41a8ba573ab165eb2acd285694736a4aac5b60eec809a8535d029e",
+      "download_size": 206721,
+      "install_size": 1090834
+    },
+    {
+      "version": "1.2.20",
+      "status": "deprecated",
       "kicad_version": "9.0",
       "download_url": "https://github.com/kerstensrobin/kicad-breadboard/releases/download/v1.2.20/kicad-breadboard-1.2.20.zip",
       "download_sha256": "f812502df5bfbafa1f7f4c940e96dfbb8cf914ecb5387222e986ca0f078d60e7",
