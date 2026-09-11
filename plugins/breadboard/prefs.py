@@ -30,10 +30,12 @@ class Preferences:
     scope_channels: int = 2            # number of oscilloscope channels shown (1–4)
     psu_channels: int = 3              # number of PSU channels shown (1, 2, or 3)
     show_net_labels: bool = True       # show signal net labels on the board
+    show_ratsnest: bool = False        # show ratsnest lines while placing a component
     show_binding_posts: bool = True    # draw binding-post terminals on the board
     num_terminals: int = 3             # number of binding-post terminals shown (2, 3, or 4)
     export_format: str = 'png'         # 'png' or 'svg'
-    board_layout: str = 'full'         # 'mini', 'half', 'full', 'double', 'triple'
+    board_layout: str = 'full'         # 'mini', 'half', 'full', 'double', 'triple',
+                                        # 'double_rails', 'sunny-11'
     binding_post_side: str = 'left'    # 'left', 'right', 'top', 'bottom'
     show_baseboard: bool = True        # draw a baseboard behind the breadboard(s)
     baseboard_color: str = '#3d6fa8'   # baseboard fill colour
@@ -41,7 +43,7 @@ class Preferences:
     branding_image: str = ''           # path to custom branding image (empty = built-in default)
     show_hotkeys: bool = True          # show hotkey reference panel in the side tray
     rail_split: bool = True            # power rails are electrically split in the middle
-    rail_style: str = 'bbrd_classic'  # 'bbrd_classic', 'bbrd_modern', 'solid_line', or 'none'
+    rail_style: str = 'solid_line'  # 'bbrd_classic', 'bbrd_modern', 'solid_line', or 'none'
     load_on_startup: bool = False      # restore these saved settings on next launch
 
 

@@ -11,6 +11,16 @@ A KiCad 9 / 10 plugin for introductory analog electronics courses at the Univers
 
 
 
+## v1.2 highlights
+
+- **New board: Sunny-11** — a dual-rail portrait-style layout (two portrait tie-blocks side by side over a landscape block), with its own independent V1–V4 supply rails and 5 binding posts; DIP ICs can straddle any of its three gutters, not just one
+- **Rotate the view** — a toolbar button rotates the whole canvas in 90° steps, so you can inspect wiring from any orientation without touching the underlying layout
+- **Ratsnest preview** — while placing a component or drawing a wire, dashed hint lines point from each pin to every other pin still waiting on the same schematic net, so the next connection is never a guess
+- **Component rotation reworked** — single-bank multi-pin parts (BJTs, JFETs, MOSFETs, sliders, potentiometers) now rotate in proper 4-way 90° steps instead of a single mirror-flip
+- **Broader, more reliable component detection** — transistors are recognised even when their KiCad description has no "NPN"/"PNP" wording (e.g. BD140), and pin order is corrected automatically for parts whose schematic numbering isn't the default C-B-E, so nothing silently disappears from the tray or gets wired to the wrong hole
+- Net highlighting, validation, and wire/placement interactions received a long list of bug fixes: stale binding-post state on the rotated view, dismissible ratsnest notices, a missing-supply-terminal validator check, and more
+- Cross-platform rendering fixes for Windows: a GDI+ hairline-pen bug that distorted diode/LED cathode markings under rotation, and a `wx.Image.Rotate90()` edge bug in the rotated view, both replaced with GraphicsContext-based rendering
+
 ## v1.1 highlights
 
 - Graphical overhaul with refreshed toolbar/menu icons, improved component rendering, and clearer side panels
@@ -86,7 +96,7 @@ Use **Simulate** for DC operating point analysis, or open **KiScope** for transi
 
 ## Features
 
-- Renders a breadboard in six configurable sizes: mini (170 holes), half (400), full (830), double (2× full stacked), triple (3× full with vertical power rails), or double rails (2× full with vertical power rails on both sides)
+- Renders a breadboard in seven configurable sizes: mini (170 holes), half (400), full (830), double (2× full stacked), triple (3× full with vertical power rails), double rails (2× full with vertical power rails on both sides), or Sunny-11 (two portrait tie-blocks side by side over a landscape tie-block, with independent V1–V4 supply rails and 5 binding posts)
 - Parses a KiCad netlist and shows all placeable components in a side tray — **any U-prefix IC with an even pin count is supported automatically**, even if it is not in the built-in list (555 timers, 74xx logic gates, CD4xxx, counters, shift registers, …)
 - Two-step placement for 2-pin components: click pin 1, then click pin 2; diagonal placement and power-rail connections are preserved when the component is moved later
 - Single-click placement for DIP ICs and 3-pin components (BJT, POT); DIP bodies show the reference and value (e.g. U1 / RC4558) for quick identification
@@ -98,6 +108,8 @@ Use **Simulate** for DC operating point analysis, or open **KiScope** for transi
 - Draw bendable jumper wires between any two holes (tie strip, rail, or binding post); wire colour can auto-cycle or be fixed from the toolbar
 - Validate the board against the schematic: highlights open nets (?) and shorts (⚡)
 - Highlight schematic nets from the board or from the net list overlay; in highlight mode the overlay includes a **MARK** column with a radio-style target for each net
+- **Ratsnest preview** (toolbar toggle): while placing a component or drawing a wire, dashed lines point to every other pin still waiting on the same schematic net
+- **Rotate view** (toolbar): rotate the whole canvas in 90° steps to inspect wiring from any orientation — the underlying layout is unchanged
 - Add drawing annotations directly on the breadboard: lines, rectangles, circles, text, and text boxes; annotations can be selected, moved, resized, edited, deleted, saved, and loaded
 - Export the board as a PNG or SVG image
 - "Update from schematic" re-exports the netlist via `kicad-cli` without leaving the window
@@ -141,7 +153,7 @@ If your schematic uses the standard KiCad libraries, the plugin picks up your co
 
 **Passives & discretes** — resistors (with colour bands), capacitors (film and electrolytic), inductors, diodes, Zener diodes, LEDs, potentiometers, and common SPST/SPDT/SP3T switches are recognised.
 
-**Transistors** — every BJT, JFET, and MOSFET in the standard `Device:`, `Transistor_BJT:`, and `Transistor_FET:` libraries is supported, whether you use a generic symbol (`Device:NPN`) or a specific part number (`Transistor_BJT:BC547`). Detection is based on the symbol name and the component description KiCad exports, so any part the library describes as *"NPN Transistor"* or *"N-Channel MOSFET"* will appear in the tray automatically.
+**Transistors** — every BJT, JFET, and MOSFET in the standard `Device:`, `Transistor_BJT:`, and `Transistor_FET:` libraries is supported, whether you use a generic symbol (`Device:NPN`) or a specific part number (`Transistor_BJT:BC547`, `Transistor_BJT:BD140`, …). Detection checks the symbol name, KiCad's `Sim.Device` SPICE field, and the component description, so a part is recognised even if its description has no "NPN"/"PNP" wording. Parts whose schematic pin numbering isn't the default C-B-E (KiCad's `Sim.Pins` field says otherwise) are wired to the correct physical holes automatically instead of being placed with swapped pins.
 
 **ICs** — any U-prefix component with an even pin count is placed as a DIP IC. The following op-amps additionally show named pin labels: TL081 (DIP-8), RC4558 (DIP-8), TL084 (DIP-14), and OPAMP / KiCad Simulation_SPICE (DIP-6, labelled "SIM").
 
@@ -182,10 +194,12 @@ The tray card for each transistor shows its current pinout (e.g. **C-B-E** or **
 | Preferences | Open the Preferences dialog |
 | Undo / Redo | Undo or redo board edits |
 | Zoom | Zoom in, zoom out, or fit the board in view |
+| Rotate view | Rotate the whole canvas 90° for inspecting wiring from another orientation |
 | Select | Select, move, resize, or edit placed items |
+| Net highlight | Highlight a schematic net by clicking a hole or the MARK column in the net list |
+| Ratsnest | Toggle dashed hint lines to matching schematic-net pins while placing a component or wire |
 | Wire | Draw a jumper wire; use the colour picker to auto-cycle or fix wire colour |
 | Delete | Delete components, wires, probes, or annotations |
-| Net highlight | Highlight a schematic net by clicking a hole or the MARK column in the net list |
 | Drawing tools | Add line, rectangle, circle, text, or text-box annotations |
 | Validate | Check if the breadboard matches the schematic |
 | Simulate | Open the SPICE simulation pane |
@@ -250,7 +264,7 @@ Open **File → Preferences…** to configure the plugin. Settings take effect i
 
 | Setting | Description |
 |---|---|
-| Size / layout | `Mini` (170 holes, no rails) · `Half` (400 holes) · `Full` (830 holes) · `Double` (2× full stacked) · `Triple` (3× full + vertical rails) · `Double Rails` (2× full + side rails) |
+| Size / layout | `Mini` (170 holes, no rails) · `Half` (400 holes) · `Full` (830 holes) · `Double` (2× full stacked) · `Triple` (3× full + vertical rails) · `Double Rails` (2× full + side rails) · `Sunny-11` (dual-rail portrait style, fixed 5 binding posts) |
 | Split power rails | Electrically disconnect each power rail in the middle |
 | Binding posts side | Position of the binding posts: `Left`, `Right`, top left/centre/right, or bottom left/centre/right |
 | Number of binding posts | Show 2, 3, or 4 posts, where the layout has room |

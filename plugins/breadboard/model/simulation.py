@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 from .breadboard import Breadboard
+from .components import ALL_DEFS
 from .netlist import Netlist
 
 
@@ -403,6 +404,23 @@ def _external_model_conflicts(board: 'Breadboard', netlist: 'Netlist') -> List[s
     return conflicts
 
 
+def _bjt_element_line(ref: str, type_id: str, p, model_name: str) -> Optional[str]:
+    """SPICE Q-element for an NPN/PNP part, looking up which schematic pin
+    number is C/B/E from the ComponentDef's pin_names rather than assuming
+    1=C/2=B/3=E — needed for parts whose symbol numbers pins in a different
+    order (e.g. BD140's Q_PNP_ECB base numbers them 1=E/2=C/3=B), which
+    guess_type_id's _bjt_type_id registers as a distinct type_id ('PNP_ECB')
+    with pin_names corrected to match."""
+    comp_def = ALL_DEFS.get(type_id)
+    if comp_def is None:
+        return None
+    pin_of = {name: num for num, name in comp_def.pin_names.items()}
+    c, b, e = pin_of.get('C'), pin_of.get('B'), pin_of.get('E')
+    if c is None or b is None or e is None:
+        return None
+    return f'Q{ref}  {p(c)}  {p(b)}  {p(e)}  {model_name}'
+
+
 def _element_line(ref: str, type_id: str,
                   pins: Dict[int, str],   # pin_num → spice_node
                   value: str) -> Optional[str]:
@@ -436,12 +454,11 @@ def _element_line(ref: str, type_id: str,
     if tid == 'LED':
         return f'D{ref}  {p(2)}  {p(1)}  Dled'
 
-    if tid == 'NPN':
-        # pin1=C, pin2=B, pin3=E
-        return f'Q{ref}  {p(1)}  {p(2)}  {p(3)}  QNPN'
+    if tid == 'NPN' or tid.startswith('NPN_'):
+        return _bjt_element_line(ref, tid, p, 'QNPN')
 
-    if tid == 'PNP':
-        return f'Q{ref}  {p(1)}  {p(2)}  {p(3)}  QPNP'
+    if tid == 'PNP' or tid.startswith('PNP_'):
+        return _bjt_element_line(ref, tid, p, 'QPNP')
 
     if tid == 'JFET_N':
         # pin1=S, pin2=G, pin3=D  →  SPICE J: drain gate source model

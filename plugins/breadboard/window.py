@@ -38,9 +38,10 @@ from .model import (
     ALL_DEFS, guess_type_id,
     save_session, load_session,
     PROBE_NAMES, PROBE_META,
+    TERMINAL_NAMES,
 )
 
-PLUGIN_VERSION = '1.1.2'
+PLUGIN_VERSION = '1.2.20'
 REPO           = 'kerstensrobin/kicad-breadboard'
 
 # Toolbar button IDs
@@ -62,13 +63,14 @@ ID_PIN_FN       = wx.NewIdRef()
 ID_ZOOM_IN      = wx.NewIdRef()
 ID_ZOOM_OUT     = wx.NewIdRef()
 ID_ZOOM_FIT     = wx.NewIdRef()
-ID_EESCHEMA     = wx.NewIdRef()
+ID_ROTATE_VIEW  = wx.NewIdRef()
 ID_UNDO         = wx.NewIdRef()
 ID_REDO         = wx.NewIdRef()
 ID_SIMULATE     = wx.NewIdRef()
 
 # Right vertical toolbar — drawing/editing tool palette (mirrors Eeschema right toolbar)
 ID_NET_HIGHLIGHT = wx.NewIdRef()
+ID_RATSNEST      = wx.NewIdRef()
 ID_NOCONN        = wx.NewIdRef()
 ID_ADD_LABEL     = wx.NewIdRef()
 ID_ADD_GLABEL    = wx.NewIdRef()
@@ -289,6 +291,9 @@ class BreadboardWindow(wx.Frame):
         self.Centre()
         self.Show()
         self.Raise()
+        self.canvas.SetFocus()   # no widget has focus by default on Show(); without
+                                  # this, hotkeys like 'W' are silently dropped until
+                                  # some other click gives a control focus first
 
     def _set_icon(self) -> None:
         ico_path = _RESOURCES / 'icon.ico'
@@ -337,7 +342,7 @@ class BreadboardWindow(wx.Frame):
         comp_label = wx.StaticText(left_panel, label='Components')
         comp_label.SetFont(wx.Font(9, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL,
                                    wx.FONTWEIGHT_BOLD))
-        self._pin_fn_cb = wx.CheckBox(left_panel, label='Pin functions')
+        self._pin_fn_cb = wx.CheckBox(left_panel, label='IC pin functions')
         self._pin_fn_cb.SetFont(wx.Font(8, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL,
                                         wx.FONTWEIGHT_NORMAL))
         self._pin_fn_cb.SetToolTip(
@@ -362,7 +367,13 @@ class BreadboardWindow(wx.Frame):
         main_panel.SetSizer(outer_sizer)
 
         # --- Right panel: binding posts, instruments, hotkeys ---
-        tray_panel = wx.Panel(inner_splitter)
+        # A ScrolledWindow rather than a plain Panel: on a short window (small
+        # screen, or the sidebar shown alongside a tall canvas) this sidebar's
+        # content — binding posts, instruments, hotkey reference, credits —
+        # can be taller than the available height. A plain Panel would just
+        # clip whatever doesn't fit (the credits line at the very bottom);
+        # this scrolls instead.
+        tray_panel = wx.ScrolledWindow(inner_splitter, style=wx.VSCROLL)
         tray_panel.SetBackgroundColour(_panel_bg())
         tray_sizer = wx.BoxSizer(wx.VERTICAL)
 
@@ -375,11 +386,12 @@ class BreadboardWindow(wx.Frame):
                                    wx.FONTWEIGHT_BOLD))
         binding_sizer.Add(term_label, 0, wx.LEFT | wx.TOP | wx.RIGHT, 6)
 
-        _TERM_COLORS = {'GND': '#3a3a3a', 'V1': '#bb2020', 'V2': '#1a7a30', 'V3': '#1a5a8a'}
+        _TERM_COLORS = {'GND': '#3a3a3a', 'V1': '#bb2020', 'V2': '#1a7a30', 'V3': '#1a5a8a',
+                        'V4': '#7a3a9a'}
         self._term_choices: dict = {}
         self._term_row_panels: dict = {}
         term_rows_sizer = wx.BoxSizer(wx.VERTICAL)
-        for name in ('GND', 'V1', 'V2', 'V3'):
+        for name in TERMINAL_NAMES:
             row = wx.Panel(self._binding_panel)
             row_sz = wx.BoxSizer(wx.HORIZONTAL)
             lbl = wx.StaticText(row, label=name)
@@ -578,6 +590,8 @@ class BreadboardWindow(wx.Frame):
         tray_outer.Add(_right_sep, 0, wx.EXPAND)
         tray_outer.Add(tray_sizer, 1, wx.EXPAND)
         tray_panel.SetSizer(tray_outer)
+        tray_panel.SetScrollRate(0, 12)
+        tray_panel.FitInside()
 
         inner_splitter.SplitVertically(canvas_area, tray_panel, sashPosition=-260)
         inner_splitter.SetMinimumPaneSize(150)
@@ -612,10 +626,14 @@ class BreadboardWindow(wx.Frame):
         vt.AddTool(ID_NET_HIGHLIGHT, 'Highlight Net',
                    _kicad_icon('net_highlight_schematic_24.png', _ico),
                    shortHelp='Highlight net — click a hole to show its connections', kind=wx.ITEM_CHECK)
+        vt.AddTool(ID_RATSNEST, 'Ratsnest',
+                   _kicad_icon('general_ratsnest_24.png', _ico),
+                   shortHelp='Show ratsnest lines to matching nets while placing a component',
+                   kind=wx.ITEM_CHECK)
         vt.AddSeparator()
 
         # --- Wiring ---
-        vt.AddTool(ID_WIRE, 'Wire', _kicad_icon('add_line_24.png', _ico),
+        vt.AddTool(ID_WIRE, 'Wire', _local_icon('wire_tool_64.png', _ico),
                    shortHelp='Draw jumper wire  [W]', kind=wx.ITEM_CHECK)
         vt.AddSeparator()
 
@@ -645,6 +663,7 @@ class BreadboardWindow(wx.Frame):
 
         # Reflect initial mode (SELECT)
         vt.ToggleTool(ID_SELECT, True)
+        vt.ToggleTool(ID_RATSNEST, self.prefs.show_ratsnest)
         return vt
 
     def _build_menu(self) -> None:
@@ -717,6 +736,8 @@ class BreadboardWindow(wx.Frame):
                    shortHelp='Zoom out  [-]')
         tb.AddTool(ID_ZOOM_FIT, 'Fit View', _kicad_icon('zoom_fit_in_page_24.png', _ico),
                    shortHelp='Fit board in view  [Ctrl+Home]')
+        tb.AddTool(ID_ROTATE_VIEW, 'Rotate View', _kicad_icon('rotate_cw_24.png', _ico),
+                   shortHelp='Rotate the view 90°')
         tb.AddSeparator()
 
         # Schematic sync
@@ -724,15 +745,13 @@ class BreadboardWindow(wx.Frame):
                              else 'update_bbrd_from_sch_64.png')
         tb.AddTool(ID_UPDATE, 'Update', _local_icon(_update_icon_name, _ico),
                    shortHelp='Re-export netlist from .kicad_sch and reload (requires kicad-cli)')
-        tb.AddTool(ID_EESCHEMA, 'Schematic', _kicad_icon('icon_eeschema_24_24.png', _ico),
-                   shortHelp='Open schematic in Eeschema')
         tb.AddSeparator()
 
         # Interaction modes
         tb.AddTool(ID_SELECT, 'Select', _kicad_icon('cursor_24.png', _ico),
                    shortHelp='Select and move placed components  [Esc]',
                    kind=wx.ITEM_RADIO)
-        tb.AddTool(ID_WIRE, 'Wire', _kicad_icon('add_line_24.png', _ico),
+        tb.AddTool(ID_WIRE, 'Wire', _local_icon('wire_tool_64.png', _ico),
                    shortHelp='Draw a jumper wire between two holes  [W]',
                    kind=wx.ITEM_RADIO)
         tb.AddControl(wx.StaticText(tb, label=' '))
@@ -759,7 +778,6 @@ class BreadboardWindow(wx.Frame):
 
         tb.EnableTool(ID_UNDO, False)
         tb.EnableTool(ID_REDO, False)
-        tb.EnableTool(ID_EESCHEMA, False)
 
         self.toolbar = tb
 
@@ -777,6 +795,7 @@ class BreadboardWindow(wx.Frame):
         self.Bind(wx.EVT_TOOL, self._on_wire,          id=ID_WIRE)
         self.Bind(wx.EVT_TOOL, self._on_delete,        id=ID_DELETE)
         self.Bind(wx.EVT_TOOL, self._on_net_highlight, id=ID_NET_HIGHLIGHT)
+        self.Bind(wx.EVT_TOOL, self._on_ratsnest,      id=ID_RATSNEST)
         self.Bind(wx.EVT_TOOL, self._on_draw_line,     id=ID_DRAW_LINE)
         self.Bind(wx.EVT_TOOL, self._on_draw_rect,     id=ID_DRAW_RECT)
         self.Bind(wx.EVT_TOOL, self._on_draw_circle,   id=ID_DRAW_CIRCLE)
@@ -785,7 +804,7 @@ class BreadboardWindow(wx.Frame):
         self.Bind(wx.EVT_TOOL, self._on_zoom_in,  id=ID_ZOOM_IN)
         self.Bind(wx.EVT_TOOL, self._on_zoom_out, id=ID_ZOOM_OUT)
         self.Bind(wx.EVT_TOOL, self._on_zoom_fit, id=ID_ZOOM_FIT)
-        self.Bind(wx.EVT_TOOL, self._on_eeschema, id=ID_EESCHEMA)
+        self.Bind(wx.EVT_TOOL, self._on_rotate_view, id=ID_ROTATE_VIEW)
         self.Bind(wx.EVT_TOOL, lambda _: self.canvas.undo(), id=ID_UNDO)
         self.Bind(wx.EVT_TOOL, lambda _: self.canvas.redo(), id=ID_REDO)
         self.Bind(wx.EVT_MENU, self._on_prefs,          id=ID_PREFS)
@@ -849,6 +868,12 @@ class BreadboardWindow(wx.Frame):
         else:
             self._set_mode(MODE_NET_HIGHLIGHT)
 
+    def _on_ratsnest(self, evt) -> None:
+        checked = evt.IsChecked()
+        self.canvas.show_ratsnest = checked
+        self.prefs.show_ratsnest = checked
+        self.canvas.Refresh()
+
     def _on_draw_line(self, _evt) -> None:
         if self.canvas.mode == MODE_DRAW_LINE:
             self._set_mode(MODE_SELECT)
@@ -902,46 +927,8 @@ class BreadboardWindow(wx.Frame):
     def _on_zoom_fit(self, _evt) -> None:
         self.canvas._fit_view()
 
-    def _on_eeschema(self, _evt) -> None:
-        import subprocess, shutil, sys
-        sch = find_schematic(self._project_path) if self._project_path else None
-        if not sch:
-            wx.MessageBox(
-                'No schematic (.kicad_sch) found.\nOpen a netlist first to set the project folder.',
-                'Open Schematic', wx.OK | wx.ICON_INFORMATION, self,
-            )
-            return
-
-        # Pass the .kicad_pro project file so eeschema opens within project
-        # context and KiCad's IPC single-instance socket can raise an already-
-        # running window (works on both X11 and Wayland).  Fall back to the
-        # .kicad_sch if no project file exists alongside it.
-        pro = sch.with_suffix('.kicad_pro')
-        target = pro if pro.exists() else sch
-        exe = shutil.which('eeschema') or 'eeschema'
-
-        if sys.platform.startswith('linux'):
-            # Try wmctrl regardless of display server — it works on X11 and
-            # XWayland, and fails gracefully (rc != 0) for native Wayland windows.
-            if shutil.which('wmctrl'):
-                rc = subprocess.call(
-                    ['wmctrl', '-x', '-a', 'eeschema'],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                )
-                if rc == 0:
-                    return
-
-        # On X11 without wmctrl, and on Wayland, KiCad's own IPC single-instance
-        # socket handles focus: if eeschema is already running it raises that window;
-        # otherwise a new instance opens.  Passing the .kicad_pro file is required
-        # for the IPC check to match the correct project instance.
-        try:
-            subprocess.Popen([exe, str(target)])
-        except FileNotFoundError:
-            wx.MessageBox(
-                f'eeschema not found on PATH.\nSchematic: {sch}',
-                'Open Schematic', wx.OK | wx.ICON_ERROR, self,
-            )
+    def _on_rotate_view(self, _evt) -> None:
+        self.canvas.rotate_view()
 
     def _on_history_change(self, can_undo: bool, can_redo: bool) -> None:
         self.toolbar.EnableTool(ID_UNDO, can_undo)
@@ -1133,7 +1120,7 @@ class BreadboardWindow(wx.Frame):
                     self.board.remove(ref)
                     removed.append(ref)
                 else:
-                    new_type = guess_type_id(ref, comp.value, comp.symbol, comp.lib, comp.description, comp.pin_count)
+                    new_type = guess_type_id(ref, comp.value, comp.symbol, comp.lib, comp.description, comp.pin_count, comp.properties)
                     old_type = self.board.get_placement(ref).type_id
                     if new_type != old_type:
                         self.board.remove(ref)
@@ -1278,11 +1265,17 @@ class BreadboardWindow(wx.Frame):
         if p.show_net_labels != old.show_net_labels:
             self.canvas.show_net_labels = p.show_net_labels
 
+        # Ratsnest preview while placing components
+        if p.show_ratsnest != old.show_ratsnest:
+            self.canvas.show_ratsnest = p.show_ratsnest
+            self._vtoolbar.ToggleTool(ID_RATSNEST, p.show_ratsnest)
+
         # Binding posts on canvas and sidebar
         if p.show_binding_posts != old.show_binding_posts:
             self.canvas.show_binding_posts = p.show_binding_posts
             self._tray_sizer.Show(self._binding_panel, p.show_binding_posts)
             self._tray_panel.Layout()
+            self._tray_panel.FitInside()
 
         # Number of terminals
         if p.num_terminals != old.num_terminals:
@@ -1291,17 +1284,20 @@ class BreadboardWindow(wx.Frame):
                                               p.num_terminals)
             self._refresh_terminal_rows(p.num_terminals)
             self._tray_panel.Layout()
+            self._tray_panel.FitInside()
 
         # Instruments panel visibility
         if p.instruments_enabled != old.instruments_enabled:
             self._tray_sizer.Show(self._instr_panel, p.instruments_enabled)
             self._tray_panel.Layout()
+            self._tray_panel.FitInside()
 
         # Hotkeys panel visibility
         if p.show_hotkeys != old.show_hotkeys:
             self._tray_sizer.Show(self._hotkey_line,  p.show_hotkeys)
             self._tray_sizer.Show(self._hotkey_sizer, p.show_hotkeys)
             self._tray_panel.Layout()
+            self._tray_panel.FitInside()
 
         # Oscilloscope channel count
         if p.scope_channels != old.scope_channels:
@@ -1342,6 +1338,7 @@ class BreadboardWindow(wx.Frame):
             if proceed:
                 from .model import Breadboard
                 self.board = Breadboard(layout=p.board_layout, rail_split=p.rail_split)
+                self._auto_assign_gnd()   # new board has empty terminal_nets — redo it
                 self.canvas.reload_board(self.board)
                 self.tray.board = self.board
                 self.tray.refresh_placed()
@@ -1349,6 +1346,7 @@ class BreadboardWindow(wx.Frame):
                                                   p.show_branding, p.rail_split,
                                                   p.num_terminals)
                 self.canvas._pan_initialized = False
+                self._refresh_terminal_choices()
 
         # Rail split toggle — rebuilds static topology and layout, placements unchanged
         if p.rail_split != old.rail_split:
@@ -1388,6 +1386,7 @@ class BreadboardWindow(wx.Frame):
         """Sync all canvas properties from self.prefs (called once at startup)."""
         p = self.prefs
         self.canvas.show_net_labels    = p.show_net_labels
+        self.canvas.show_ratsnest      = p.show_ratsnest
         self.canvas.show_binding_posts = p.show_binding_posts
         self.canvas.show_baseboard     = p.show_baseboard
         self.canvas.baseboard_color    = p.baseboard_color
@@ -1403,10 +1402,11 @@ class BreadboardWindow(wx.Frame):
         self._tray_sizer.Show(self._hotkey_sizer,  p.show_hotkeys)
         self._refresh_terminal_rows(p.num_terminals)
         self._tray_panel.Layout()
+        self._tray_panel.FitInside()
 
     def _refresh_terminal_rows(self, num_terminals: int) -> None:
         """Show/hide terminal rows in the binding panel based on num_terminals."""
-        for i, name in enumerate(('GND', 'V1', 'V2', 'V3')):
+        for i, name in enumerate(TERMINAL_NAMES):
             row = self._term_row_panels.get(name)
             if row:
                 row.Show(i < num_terminals)
@@ -1823,13 +1823,7 @@ class BreadboardWindow(wx.Frame):
         ) == wx.YES:
             self.canvas.push_undo()
             self.board = Breadboard(layout=self.prefs.board_layout, rail_split=self.prefs.rail_split)
-            # Re-apply GND assignments
-            _gnd_net = next((n for n in ('0', 'GND') if self.netlist and self.netlist.net_by_name(n)), None)
-            if _gnd_net:
-                self.board.assign_terminal('GND', _gnd_net)
-                if self.prefs.auto_gnd:
-                    for _pname in ('FG_GND', 'SCOPE_GND'):
-                        self.board.assign_probe_net(_pname, _gnd_net)
+            self._auto_assign_gnd()
             self.canvas.reload_board(self.board)
             self.tray.board = self.board
             self.tray.refresh_placed()
@@ -2046,6 +2040,25 @@ class BreadboardWindow(wx.Frame):
                 lbl.SetForegroundColour(wx.Colour(meta['color']))
                 lbl.SetToolTip('')
 
+    def _auto_assign_gnd(self) -> None:
+        """Assign the GND terminal (and, if enabled, the FG_GND/SCOPE_GND
+        instrument probes) to the schematic's ground net ("0" or "GND").
+
+        Called after loading a netlist, and again after swapping self.board
+        for a new layout (Preferences > board layout) — that swap creates a
+        fresh Breadboard with empty terminal_nets, so without re-running this
+        the GND assignment from the already-loaded netlist would silently be
+        lost on the new board.
+        """
+        if not self.netlist:
+            return
+        _gnd_net = next((n for n in ('0', 'GND') if self.netlist.net_by_name(n)), None)
+        if _gnd_net:
+            self.board.assign_terminal('GND', _gnd_net)
+            if self.prefs.auto_gnd:
+                for _pname in ('FG_GND', 'SCOPE_GND'):
+                    self.board.assign_probe_net(_pname, _gnd_net)
+
     def _load_netlist(self, path: str) -> None:
         if path.endswith('.kicad_sch'):
             # Export via kicad-cli first; direct parsing is not used
@@ -2066,13 +2079,7 @@ class BreadboardWindow(wx.Frame):
         self.canvas.netlist = self.netlist
         self.tray.load_netlist(self.netlist)
 
-        # Auto-assign GND terminal and instrument grounds to the ground net ("0" or "GND")
-        _gnd_net = next((n for n in ('0', 'GND') if self.netlist.net_by_name(n)), None)
-        if _gnd_net:
-            self.board.assign_terminal('GND', _gnd_net)
-            if self.prefs.auto_gnd:
-                for _pname in ('FG_GND', 'SCOPE_GND'):
-                    self.board.assign_probe_net(_pname, _gnd_net)
+        self._auto_assign_gnd()
 
         self._refresh_terminal_choices()
         self._refresh_probe_choices()
@@ -2083,7 +2090,7 @@ class BreadboardWindow(wx.Frame):
         n_total = len(self.netlist.components)
         n_shown = sum(
             1 for ref, comp in self.netlist.components.items()
-            if guess_type_id(ref, comp.value, comp.symbol, comp.lib, comp.description, comp.pin_count) is not None
+            if guess_type_id(ref, comp.value, comp.symbol, comp.lib, comp.description, comp.pin_count, comp.properties) is not None
         )
         if n_total == 0:
             self.SetStatusText(
@@ -2507,7 +2514,7 @@ class PreferencesDialog(wx.Dialog):
                 buttons.append(rb)
             return row, buttons
 
-        _layout_map = ['mini', 'half', 'full', 'double', 'triple', 'double_rails']
+        _layout_map = ['mini', 'half', 'full', 'double', 'triple', 'double_rails', 'sunny-11']
         _side_map   = ['left', 'right', 'top_left', 'top_center', 'top_right',
                        'bottom_left', 'bottom_center', 'bottom_right']
 
@@ -2537,6 +2544,9 @@ class PreferencesDialog(wx.Dialog):
         self._cb_labels = wx.CheckBox(self, label='Show signal labels')
         self._cb_labels.SetValue(prefs.show_net_labels)
         sizer.Add(self._cb_labels, 0, wx.LEFT | wx.TOP | wx.RIGHT, 10)
+        self._cb_ratsnest = wx.CheckBox(self, label='Show ratsnest while placing components')
+        self._cb_ratsnest.SetValue(prefs.show_ratsnest)
+        sizer.Add(self._cb_ratsnest, 0, wx.LEFT | wx.TOP | wx.RIGHT, 10)
         self._cb_hotkeys = wx.CheckBox(self, label='Show hotkey reference panel')
         self._cb_hotkeys.SetValue(prefs.show_hotkeys)
         sizer.Add(self._cb_hotkeys, 0, wx.LEFT | wx.TOP | wx.RIGHT, 10)
@@ -2561,6 +2571,7 @@ class PreferencesDialog(wx.Dialog):
             'Mini (170 holes, no rails)', 'Half (400 holes)', 'Full (830 holes)',
             'Double (2× full, stacked)', 'Triple (3× full + vertical rails)',
             'Double + side rails (2× full, left & right rails)',
+            'Sunny-11 (dual-rail portrait style)',
         ])
         self._ch_layout.SetSelection(
             _layout_map.index(prefs.board_layout) if prefs.board_layout in _layout_map else 2)
@@ -2606,8 +2617,16 @@ class PreferencesDialog(wx.Dialog):
         def _update_terminal_choices(_evt=None):
             layout  = _layout_map[self._ch_layout.GetSelection()]
             side    = _side_map[self._ch_post_side.GetSelection()]
-            allow_4 = side not in ('left', 'right') or layout in ('double', 'triple', 'double_rails')
             btn4 = self._rb_num_terminals[2]
+            if layout == 'sunny-11':
+                # Fixed 5-post layout (GND + V1-V4), matching the real hardware —
+                # not user-configurable.
+                for btn in self._rb_num_terminals:
+                    btn.Enable(False)
+                return
+            for btn in self._rb_num_terminals:
+                btn.Enable(True)
+            allow_4 = side not in ('left', 'right') or layout in ('double', 'triple', 'double_rails')
             if not allow_4:
                 if btn4.GetValue():
                     self._rb_num_terminals[1].SetValue(True)
@@ -2678,7 +2697,7 @@ class PreferencesDialog(wx.Dialog):
         self.CentreOnParent()
 
     def get_prefs(self) -> Preferences:
-        _layout_map = ['mini', 'half', 'full', 'double', 'triple', 'double_rails']
+        _layout_map = ['mini', 'half', 'full', 'double', 'triple', 'double_rails', 'sunny-11']
         _side_map   = ['left', 'right', 'top_left', 'top_center', 'top_right',
                        'bottom_left', 'bottom_center', 'bottom_right']
         _style_map  = ['bbrd_classic', 'bbrd_modern', 'solid_line', 'none']
@@ -2686,17 +2705,23 @@ class PreferencesDialog(wx.Dialog):
         def _sel(buttons) -> int:
             return next(i for i, b in enumerate(buttons) if b.GetValue())
 
+        _board_layout = _layout_map[self._ch_layout.GetSelection()]
+        # sunny-11 has a fixed 5-post layout (GND + V1-V4); the radio group is
+        # disabled for it in the UI, so ignore its selection here too.
+        _num_terminals = 5 if _board_layout == 'sunny-11' else _sel(self._rb_num_terminals) + 2
+
         return Preferences(
             instruments_enabled=self._cb_instr.IsChecked(),
             auto_gnd=self._cb_auto_gnd.IsChecked(),
             scope_channels=_sel(self._rb_scope) + 1,
             psu_channels=_sel(self._rb_psu) + 1,
             show_net_labels=self._cb_labels.IsChecked(),
+            show_ratsnest=self._cb_ratsnest.IsChecked(),
             show_hotkeys=self._cb_hotkeys.IsChecked(),
             show_binding_posts=self._cb_binding.IsChecked(),
-            num_terminals=_sel(self._rb_num_terminals) + 2,
+            num_terminals=_num_terminals,
             export_format='svg' if self._rb_fmt[1].GetValue() else 'png',
-            board_layout=_layout_map[self._ch_layout.GetSelection()],
+            board_layout=_board_layout,
             binding_post_side=_side_map[self._ch_post_side.GetSelection()],
             show_baseboard=self._cb_baseboard.IsChecked(),
             baseboard_color=self._cp_base.GetColour().GetAsString(wx.C2S_HTML_SYNTAX),

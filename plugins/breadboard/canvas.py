@@ -58,6 +58,17 @@ def _transparent_brush() -> 'wx.Brush':
     return wx.Brush(wx.Colour(0, 0, 0, 0), wx.BRUSHSTYLE_TRANSPARENT)
 
 
+_TO92_BASE_TYPES = frozenset({'NPN', 'PNP', 'JFET_N', 'JFET_P', 'BS170', 'NMOS', 'PMOS'})
+
+
+def _is_to92_type(type_id: str) -> bool:
+    """True for TO-92-style 3-pin parts, including per-symbol pin-order
+    variants dynamically registered by guess_type_id's _bjt_type_id (e.g.
+    'PNP_ECB' for a part whose schematic pin numbering isn't C-B-E) — those
+    still render as the same TO-92 body as their 'NPN'/'PNP' base."""
+    return type_id in _TO92_BASE_TYPES or type_id.startswith(('NPN_', 'PNP_'))
+
+
 def _parse_svg_size(path: str):
     """Return (width, height) from SVG viewBox attribute, or (100.0, 100.0) as fallback."""
     import re
@@ -77,6 +88,8 @@ from .model import (
     COLUMNS, HALF_COLUMNS, MINI_COLUMNS, TOP_ROWS, BOT_ROWS, ALL_ROWS,
     RAIL_NAMES, VERT_RAIL_NAMES, RAIL_LEN, VERT_RAIL_LEN_PER_SECTION, RAIL_SPLIT, TERMINAL_NAMES,
     RAILLESS_LAYOUTS,
+    SUNNY11_UPPER_COLS, SUNNY11_UPPER_RAIL_LEN, SUNNY11_LOWER_COLS,
+    SUNNY11_LOWER_RAIL_LEN, SUNNY11_LOWER_ROWS,
     PROBE_NAMES, PROBE_META,
     ComponentDef, ALL_DEFS,
     Netlist, guess_type_id,
@@ -129,6 +142,15 @@ _MODULE_BODY_H: Dict[str, int] = {
     'Raspberry_Pi_4':   PITCH,  # rows one grid-step apart — aligns to hole grid in any rotation
 }
 
+# sunny-11: the two upper tie-blocks are rendered transposed relative to every
+# other layout (columns run vertically, bank-rows run horizontally) and sit
+# side by side, portrait-oriented.
+SUNNY11_GAP = CENTER_GAP        # horizontal gap between the a-e/f-j banks
+SUNNY11_BLOCK_GAP_X = SUNNY11_GAP  # gap between the V1 and V2 blocks — the same
+                                    # width as the internal a-e/f-j dividers, not
+                                    # a wider seam, matching the real board
+SUNNY11_BLOCK_GAP_Y = 36        # gap between the upper blocks and the lower block
+
 # Binding posts (circular)
 TERM_R = 30         # radius of binding-post circle
 TERM_CX = TERM_R + 8   # x-centre of all binding posts (from canvas left edge)
@@ -137,6 +159,7 @@ TERM_COLORS = {
     'V1':  ('#bb2020', '#ee7070'),
     'V2':  ('#1a7a30', '#55bb66'),
     'V3':  ('#1a5a8a', '#4499cc'),
+    'V4':  ('#7a3a9a', '#b070d0'),
 }
 
 WIRE_COLORS = [
@@ -346,6 +369,9 @@ class CanvasLayout:
         self.board_layout      = board_layout
         self.binding_post_side = binding_post_side
         self.rail_split        = rail_split
+        if board_layout == 'sunny-11':
+            self._init_sunny11()
+            return
         _col_map = {'mini': MINI_COLUMNS, 'half': HALF_COLUMNS}
         self.columns  = _col_map.get(board_layout, COLUMNS)
         self.sections = {'half': 1, 'full': 1, 'double': 2, 'triple': 3, 'double_rails': 2}.get(board_layout, 1)
@@ -559,6 +585,288 @@ class CanvasLayout:
             self.branding_rotated = False
 
     # ------------------------------------------------------------------
+    # sunny-11: bespoke geometry (transposed portrait blocks + a landscape block)
+    # ------------------------------------------------------------------
+
+    def _init_sunny11(self) -> None:
+        self.columns = SUNNY11_UPPER_COLS
+        self.sections = 3
+        self.has_rails = True
+        self.rail_len = 0
+        self._vert_rail_cx: Dict[str, int] = {}
+        self._vert_hole_y: List[int] = []
+        self.branding_rect: Optional[wx.Rect] = None
+        self.branding_rotated = False
+        self._module_pin_xy: Dict[Tuple[str, int], Tuple[int, int]] = {}
+
+        # --- Portrait blocks: row-letter axis -> x, column-number axis -> y ---
+        # Pitch is the same PITCH used everywhere else on the board (upper and
+        # lower, both axes) — SUNNY11_LOWER_COLS is chosen so the lower
+        # block's natural width already lands close to the upper pair's,
+        # rather than stretching one section's hole spacing to force a match.
+        self._s11_row_pitch = PITCH
+        bank_w = (len(TOP_ROWS) - 1) * PITCH
+        self._s11_row_x: Dict[str, int] = {}
+        for i, row in enumerate(TOP_ROWS):
+            self._s11_row_x[row] = i * PITCH
+        for i, row in enumerate(BOT_ROWS):
+            self._s11_row_x[row] = bank_w + SUNNY11_GAP + i * PITCH
+        block_w = bank_w + SUNNY11_GAP + bank_w
+        self._s11_gap_upper = SUNNY11_GAP
+        self._s11_gap_block_x = SUNNY11_BLOCK_GAP_X
+
+        post_area_h = TERM_R * 2 + MARGIN * 4  # extra MARGIN so the post's net-assignment
+                                                 # label has clearance above the board body
+        minus_y = post_area_h + MARGIN // 2
+        plus_y  = minus_y + RAIL_H + 2
+        tie_top_y = plus_y + RAIL_H + RAIL_GAP
+        self._s11_col_y: Dict[int, int] = {
+            col: tie_top_y + (col - 1) * PITCH for col in range(1, SUNNY11_UPPER_COLS + 1)
+        }
+        self._s11_plus_y  = plus_y
+        self._s11_minus_y = minus_y
+        self._s11_block_w = block_w
+        self._s11_block_top = minus_y - RAIL_H
+        upper_block_bottom = self._s11_col_y[SUNNY11_UPPER_COLS] + MARGIN // 2
+        self._s11_block_bottom = upper_block_bottom
+
+        # The lower block and the upper pair now land close in natural width
+        # (see SUNNY11_LOWER_COLS), so centre whichever is wider and shift the
+        # other to share that centre, rather than assuming which way round.
+        lower_w = (SUNNY11_LOWER_COLS - 1) * PITCH
+        lower_left = MARGIN
+        lower_center = lower_left + lower_w // 2
+        block0_left = max(MARGIN, lower_center - (block_w + SUNNY11_BLOCK_GAP_X // 2))
+        self._s11_block_left: Dict[int, int] = {
+            0: block0_left,
+            1: block0_left + block_w + SUNNY11_BLOCK_GAP_X,
+        }
+        _row_order = list(ALL_ROWS)   # matches SUNNY11_UPPER_RAIL_LEN order
+        self._s11_plus_rail_x: Dict[int, List[int]] = {
+            section: [left + self._s11_row_x[r] for r in _row_order]
+            for section, left in self._s11_block_left.items()
+        }
+        self._s11_minus_top_x: List[int] = self._s11_plus_rail_x[0] + self._s11_plus_rail_x[1]
+
+        upper_total_w = self._s11_block_left[1] + block_w + MARGIN
+
+        # --- Landscape lower block: standard orientation ---
+        # Unlike the upper blocks (minus on top, plus nearer the tie rows),
+        # the real board prints the lower block's rails the other way round:
+        # plus (V3/V4) on top, minus nearer the tie rows.
+        lower_top    = upper_block_bottom + SUNNY11_BLOCK_GAP_Y
+        lower_plus_y  = lower_top
+        lower_minus_y = lower_plus_y + RAIL_H + 2
+        lower_tie_top = lower_minus_y + RAIL_H + RAIL_GAP
+        self._s11_lower_col_x: Dict[int, int] = {
+            col: lower_left + (col - 1) * PITCH for col in range(1, SUNNY11_LOWER_COLS + 1)
+        }
+        self._s11_lower_row_y: Dict[str, int] = {
+            row: lower_tie_top + i * PITCH for i, row in enumerate(SUNNY11_LOWER_ROWS)
+        }
+        self._s11_lower_plus_y  = lower_plus_y
+        self._s11_lower_minus_y = lower_minus_y
+
+        # Same construction as the V1/V2 rails above (a 5-hole bank, gap,
+        # 5-hole bank per half, and the same-size gap between halves),
+        # mirrored horizontally — rather than a different scheme for the
+        # bottom rails. Centred within the lower block's own width so the
+        # V3/V4 gap still lines up with the groove between the V1/V2 blocks.
+        def _half(start: int) -> List[int]:
+            return ([start + i * PITCH for i in range(len(TOP_ROWS))]
+                    + [start + bank_w + SUNNY11_GAP + i * PITCH for i in range(len(TOP_ROWS))])
+
+        rail_half_w = block_w
+        rail_total_w = 2 * rail_half_w + SUNNY11_BLOCK_GAP_X
+        rail_start = lower_left + (lower_w - rail_total_w) // 2
+        self._s11_lower_plus_x: Dict[str, List[int]] = {
+            'lower_plus_left':  _half(rail_start),
+            'lower_plus_right': _half(rail_start + rail_half_w + SUNNY11_BLOCK_GAP_X),
+        }
+        self._s11_lower_minus_x: List[int] = (
+            self._s11_lower_plus_x['lower_plus_left'] + self._s11_lower_plus_x['lower_plus_right']
+        )
+
+        self._s11_lower_top = lower_top - RAIL_H
+        lower_bottom  = self._s11_lower_row_y[SUNNY11_LOWER_ROWS[-1]] + MARGIN
+        self._s11_lower_bottom = lower_bottom
+        self._s11_lower_w = lower_w
+
+        # --- Baseboard protrusion & consistent margins on every side ---
+        # The formulas above only reserve trailing margin on the right and
+        # bottom edges; the left edge lands only a hole's pitch away from the
+        # canvas edge. Recompute the true content bounds and shift
+        # everything so the board sits with a uniform, slightly generous
+        # margin on all four sides instead.
+        post_y_local = MARGIN + TERM_R
+        content_left   = min(self._s11_block_left[0], self._s11_lower_col_x[1]) - PITCH
+        content_right  = max(self._s11_block_left[1] + block_w,
+                              self._s11_lower_col_x[SUNNY11_LOWER_COLS]) + PITCH
+        content_top    = min(self._s11_block_top, post_y_local - TERM_R)
+        content_bottom = lower_bottom
+
+        outer_pad = MARGIN + 6    # more generous than the plain MARGIN other
+                                  # layouts use, so the baseboard clearly
+                                  # protrudes beyond the board on every side
+        dx = outer_pad - content_left
+        dy = outer_pad - content_top
+
+        for col in self._s11_col_y:
+            self._s11_col_y[col] += dy
+        self._s11_plus_y  += dy
+        self._s11_minus_y += dy
+        self._s11_block_top    += dy
+        self._s11_block_bottom += dy
+        for section in self._s11_block_left:
+            self._s11_block_left[section] += dx
+        for section in self._s11_plus_rail_x:
+            self._s11_plus_rail_x[section] = [x + dx for x in self._s11_plus_rail_x[section]]
+        self._s11_minus_top_x = [x + dx for x in self._s11_minus_top_x]
+        for col in self._s11_lower_col_x:
+            self._s11_lower_col_x[col] += dx
+        for row in self._s11_lower_row_y:
+            self._s11_lower_row_y[row] += dy
+        self._s11_lower_plus_y  += dy
+        self._s11_lower_minus_y += dy
+        for name in self._s11_lower_plus_x:
+            self._s11_lower_plus_x[name] = [x + dx for x in self._s11_lower_plus_x[name]]
+        self._s11_lower_minus_x = [x + dx for x in self._s11_lower_minus_x]
+        self._s11_lower_top    += dy
+        self._s11_lower_bottom += dy
+
+        self._total_width = (content_right - content_left) + 2 * outer_pad
+        self.total_height = (content_bottom - content_top) + 2 * outer_pad
+
+        # --- 5 binding posts along the top edge (fixed; not user-configurable) ---
+        # Evenly spaced left-to-right in GND/V1/V2/V3/V4 order, matching the
+        # real hardware — the posts don't line up above their rail, since each
+        # one wires down to it internally regardless of where it sits on top.
+        n = len(TERMINAL_NAMES)
+        v_margin = TERM_R + MARGIN
+        spacing = (self._total_width - 2 * v_margin) // max(1, n - 1)
+        post_y = post_y_local + dy
+        self._term_pos: Dict[str, Tuple[int, int]] = {
+            name: (v_margin + i * spacing, post_y) for i, name in enumerate(TERMINAL_NAMES)
+        }
+        self._term_y = {name: pos[1] for name, pos in self._term_pos.items()}
+
+    def _sunny11_hole_xy(self, hole: Hole) -> Optional[Tuple[int, int]]:
+        if isinstance(hole, TieHole):
+            if hole.section in (0, 1):
+                if hole.col not in self._s11_col_y or hole.row not in self._s11_row_x:
+                    return None
+                return (self._s11_block_left[hole.section] + self._s11_row_x[hole.row],
+                        self._s11_col_y[hole.col])
+            if hole.section == 2:
+                if hole.col not in self._s11_lower_col_x or hole.row not in self._s11_lower_row_y:
+                    return None
+                return self._s11_lower_col_x[hole.col], self._s11_lower_row_y[hole.row]
+            return None
+        if isinstance(hole, RailHole):
+            if hole.rail == 'top_plus':
+                xs = self._s11_plus_rail_x.get(hole.section)
+                if not xs or not (1 <= hole.index <= len(xs)):
+                    return None
+                return xs[hole.index - 1], self._s11_plus_y
+            if hole.rail == 'sunny_top_minus':
+                if not (1 <= hole.index <= len(self._s11_minus_top_x)):
+                    return None
+                return self._s11_minus_top_x[hole.index - 1], self._s11_minus_y
+            if hole.rail in ('lower_plus_left', 'lower_plus_right'):
+                xs = self._s11_lower_plus_x.get(hole.rail)
+                if not xs or not (1 <= hole.index <= len(xs)):
+                    return None
+                return xs[hole.index - 1], self._s11_lower_plus_y
+            if hole.rail == 'sunny_bot_minus':
+                if not (1 <= hole.index <= len(self._s11_lower_minus_x)):
+                    return None
+                return self._s11_lower_minus_x[hole.index - 1], self._s11_lower_minus_y
+            return None
+        if isinstance(hole, Terminal):
+            return self._term_pos.get(hole.name)
+        if isinstance(hole, ModulePin):
+            return self._module_pin_xy.get((hole.ref, hole.pin))
+        return None
+
+    def _sunny11_nearest(self, px: int, py: int, include_extra: bool = True) -> Optional[Hole]:
+        """include_extra=False mirrors nearest_probe_hole: ties/rails only."""
+        best: Optional[Hole] = None
+        best_d = PITCH
+
+        for section in (0, 1):
+            left = self._s11_block_left[section]
+            for row, rx_off in self._s11_row_x.items():
+                rx = left + rx_off
+                if abs(rx - px) > best_d:
+                    continue
+                for col, ry in self._s11_col_y.items():
+                    d = math.hypot(rx - px, ry - py)
+                    if d < best_d:
+                        best_d = d
+                        best = TieHole(col, row, section)
+
+        for row, ry in self._s11_lower_row_y.items():
+            if abs(ry - py) > best_d:
+                continue
+            for col, cx in self._s11_lower_col_x.items():
+                d = math.hypot(cx - px, ry - py)
+                if d < best_d:
+                    best_d = d
+                    best = TieHole(col, row, 2)
+
+        for section, xs in self._s11_plus_rail_x.items():
+            ry = self._s11_plus_y
+            if abs(ry - py) > best_d:
+                continue
+            for idx, rx in enumerate(xs, 1):
+                d = math.hypot(rx - px, ry - py)
+                if d < best_d:
+                    best_d = d
+                    best = RailHole('top_plus', idx, section)
+
+        ry = self._s11_minus_y
+        if abs(ry - py) <= best_d:
+            for idx, rx in enumerate(self._s11_minus_top_x, 1):
+                d = math.hypot(rx - px, ry - py)
+                if d < best_d:
+                    best_d = d
+                    best = RailHole('sunny_top_minus', idx)
+
+        for name, xs in self._s11_lower_plus_x.items():
+            ry = self._s11_lower_plus_y
+            if abs(ry - py) > best_d:
+                continue
+            for idx, rx in enumerate(xs, 1):
+                d = math.hypot(rx - px, ry - py)
+                if d < best_d:
+                    best_d = d
+                    best = RailHole(name, idx, 2)
+
+        ry = self._s11_lower_minus_y
+        if abs(ry - py) <= best_d:
+            for idx, rx in enumerate(self._s11_lower_minus_x, 1):
+                d = math.hypot(rx - px, ry - py)
+                if d < best_d:
+                    best_d = d
+                    best = RailHole('sunny_bot_minus', idx)
+
+        if include_extra:
+            for t_name in TERMINAL_NAMES:
+                xy = self._term_pos.get(t_name)
+                if xy:
+                    d = math.hypot(xy[0] - px, xy[1] - py)
+                    if d < best_d:
+                        best_d = d
+                        best = Terminal(t_name)
+            for (ref, pin), (hx, hy) in self._module_pin_xy.items():
+                d = math.hypot(hx - px, hy - py)
+                if d < best_d:
+                    best_d = d
+                    best = ModulePin(ref=ref, pin=pin)
+
+        return best
+
+    # ------------------------------------------------------------------
     # Coordinate helpers
     # ------------------------------------------------------------------
 
@@ -587,6 +895,8 @@ class CanvasLayout:
 
     def hole_xy(self, hole: Hole) -> Optional[Tuple[int, int]]:
         """Return (x, y) centre of a hole, or None if not renderable."""
+        if self.board_layout == 'sunny-11':
+            return self._sunny11_hole_xy(hole)
         if isinstance(hole, TieHole):
             s = hole.section
             if s >= self.sections:
@@ -626,6 +936,8 @@ class CanvasLayout:
 
     def nearest_hole(self, px: int, py: int) -> Optional[Hole]:
         """Return the hole closest to canvas pixel (px, py), within snap radius."""
+        if self.board_layout == 'sunny-11':
+            return self._sunny11_nearest(px, py, include_extra=True)
         best: Optional[Hole] = None
         best_d = PITCH
 
@@ -687,6 +999,8 @@ class CanvasLayout:
 
     def nearest_probe_hole(self, px: int, py: int) -> Optional[Hole]:
         """Return the nearest TieHole or RailHole (no terminals), within snap radius."""
+        if self.board_layout == 'sunny-11':
+            return self._sunny11_nearest(px, py, include_extra=False)
         best: Optional[Hole] = None
         best_d = PITCH
 
@@ -725,6 +1039,55 @@ class CanvasLayout:
                     best = RailHole(rail, idx)
 
         return best
+
+    def all_holes(self):
+        """Yield every renderable hole on the current layout (ties, rails,
+        terminals, module pins). Used to search a whole electrical group
+        (via UnionFind) for the geometrically nearest point, rather than a
+        single fixed anchor — e.g. so a ratsnest line can end at the nearest
+        rail hole instead of always at a terminal binding post."""
+        if self.board_layout == 'sunny-11':
+            yield from self._sunny11_all_holes()
+            return
+        for section in range(self.sections):
+            for col in range(1, self.columns + 1):
+                for row in ALL_ROWS:
+                    yield TieHole(col, row, section)
+        if self.has_rails:
+            for section in range(self.sections):
+                for rail in RAIL_NAMES:
+                    for idx in range(1, RAIL_LEN + 1):
+                        yield RailHole(rail, idx, section)
+        for rail in self._vert_rail_cx:
+            for idx in range(1, len(self._vert_hole_y) + 1):
+                yield RailHole(rail, idx)
+        for t_name in TERMINAL_NAMES:
+            yield Terminal(t_name)
+        for ref, pin in self._module_pin_xy:
+            yield ModulePin(ref=ref, pin=pin)
+
+    def _sunny11_all_holes(self):
+        for section in (0, 1):
+            for row in self._s11_row_x:
+                for col in self._s11_col_y:
+                    yield TieHole(col, row, section)
+        for row in self._s11_lower_row_y:
+            for col in self._s11_lower_col_x:
+                yield TieHole(col, row, 2)
+        for section, xs in self._s11_plus_rail_x.items():
+            for idx in range(1, len(xs) + 1):
+                yield RailHole('top_plus', idx, section)
+        for idx in range(1, len(self._s11_minus_top_x) + 1):
+            yield RailHole('sunny_top_minus', idx)
+        for name, xs in self._s11_lower_plus_x.items():
+            for idx in range(1, len(xs) + 1):
+                yield RailHole(name, idx, 2)
+        for idx in range(1, len(self._s11_lower_minus_x) + 1):
+            yield RailHole('sunny_bot_minus', idx)
+        for t_name in TERMINAL_NAMES:
+            yield Terminal(t_name)
+        for ref, pin in self._module_pin_xy:
+            yield ModulePin(ref=ref, pin=pin)
 
 
 # ---------------------------------------------------------------------------
@@ -974,7 +1337,21 @@ class BreadboardCanvas(wx.Panel):
 
         self._ghost: Optional[DragGhost] = None      # component pending placement
         self._ghost_pos: Tuple[int, int] = (0, 0)    # current mouse pos
+        self._ghost_track_timer = wx.Timer(self)     # keeps ghost/ratsnest following the
+                                                       # mouse once it leaves the canvas's
+                                                       # own client area (EVT_MOTION stops
+                                                       # firing there, so we poll instead)
+        self._pointer_over_canvas: bool = True        # see _update_ghost_follow's floating-
+                                                       # placeholder fallback: float only when
+                                                       # truly off-canvas, not over a hole-less
+                                                       # gap *within* the board (e.g. sunny-11's
+                                                       # inter-block gutter), where a floating
+                                                       # preview would misleadingly suggest a
+                                                       # component could actually be dropped there
         self._place_pin1: Optional[Hole] = None       # locked pin-1 hole for 2-pin two-step placement
+        self._ratsnest_notice: str = ''              # set by _draw_ratsnest when a net has no board target yet
+        self._ratsnest_notice_dismissed: str = ''    # message text the user closed via the 'x' — suppressed until it changes
+        self._ratsnest_close_rect: Optional[wx.Rect] = None  # screen-space hit box for the notice's close button
 
         self._selected_ref: Optional[str] = None     # selected placed component
         self._selected_wire: Optional[Wire] = None   # selected wire
@@ -1023,13 +1400,14 @@ class BreadboardCanvas(wx.Panel):
         self._validation_icons: List[Tuple[int, int, IssueKind]] = []
 
         self.show_net_labels: bool = True    # toggled via preferences
+        self.show_ratsnest: bool = False     # toggled via toolbar / preferences
         self.show_voltage_labels: bool = True  # toggled via SimPane checkbox
         self.show_binding_posts: bool = True # toggled via preferences
         self.show_baseboard: bool = False    # toggled via preferences
         self.show_branding: bool = False
         self.baseboard_color: str = '#3d6fa8'
         self.branding_image: str = ''
-        self.rail_style: str = 'bbrd_classic'  # toggled via preferences
+        self.rail_style: str = 'solid_line'  # toggled via preferences
 
         self._placing_probe: Optional[str] = None   # probe name pending placement
         self._probe_drag: bool = False              # True = drag-to-place (release to commit)
@@ -1063,6 +1441,7 @@ class BreadboardCanvas(wx.Panel):
         self._pan_x: float = 0.0
         self._pan_y: float = 0.0
         self._pan_initialized: bool = False
+        self._view_rotation: int = 0   # 0/90/180/270, clockwise, display-only
         self._user_interacted: bool = False
         self._mid_drag: bool = False
         self._mid_drag_start: Tuple[int, int] = (0, 0)
@@ -1082,6 +1461,7 @@ class BreadboardCanvas(wx.Panel):
         self.Bind(wx.EVT_MIDDLE_DOWN, self._on_middle_down)
         self.Bind(wx.EVT_MIDDLE_UP, self._on_middle_up)
         self.Bind(wx.EVT_SIZE, self._on_size)
+        self.Bind(wx.EVT_TIMER, self._on_ghost_track_timer, self._ghost_track_timer)
 
     # ------------------------------------------------------------------
     # Public API (called from window / tray)
@@ -1092,6 +1472,12 @@ class BreadboardCanvas(wx.Panel):
         self.layout = CanvasLayout(self.board.layout, self.layout.binding_post_side,
                                    self.show_branding)
         self._pan_initialized = False   # trigger re-fit on next paint
+        self.Refresh()
+
+    def rotate_view(self) -> None:
+        """Rotate the on-screen view 90° clockwise (does not affect the model)."""
+        self._view_rotation = (self._view_rotation + 90) % 360
+        self._pan_initialized = False   # re-fit to the (possibly transposed) canvas
         self.Refresh()
 
     def reload_board(self, board: Breadboard) -> None:
@@ -1400,7 +1786,38 @@ class BreadboardCanvas(wx.Panel):
         """Called from the tray when a component card is clicked."""
         self._ghost = DragGhost(comp_def=comp_def, ref=ref)
         self._place_pin1 = None
+        self._ratsnest_notice_dismissed = ''   # allow this placement's own notice to show
         self.SetFocus()   # so key events (Escape) reach the canvas
+        # The tray card that was just clicked lives outside the canvas, so the
+        # mouse starts this placement off-canvas (no EVT_MOTION there yet) —
+        # poll its position until it moves over the canvas and EVT_MOTION takes over.
+        if not self._ghost_track_timer.IsRunning():
+            self._ghost_track_timer.Start(30)
+        self.Refresh()
+
+    def _update_ghost_follow(self, px: int, py: int) -> None:
+        """Shared by _on_motion and the off-canvas poll timer: move the ghost
+        preview to (px, py) and re-snap its anchor hole."""
+        self._ghost_pos = (px, py)
+        if self._ghost is None:
+            return
+        comp_def = self._ghost.comp_def
+        if comp_def.is_module:
+            return   # module ghost always follows mouse; no snap needed
+        anchor = self.layout.nearest_hole(px, py)
+        if comp_def.pin_count == 2 and not comp_def.is_dip:
+            self._ghost.anchor = anchor  # accept tie strip or power rail
+        else:
+            self._ghost.anchor = anchor if isinstance(anchor, TieHole) else None
+
+    def _on_ghost_track_timer(self, _evt) -> None:
+        if self._ghost is None:
+            self._ghost_track_timer.Stop()
+            return
+        client_pos = self.ScreenToClient(wx.GetMousePosition())
+        self._pointer_over_canvas = self.GetClientRect().Contains(client_pos)
+        px, py = self._board_pos(client_pos.x, client_pos.y)
+        self._update_ghost_follow(px, py)
         self.Refresh()
 
     def _commit_place(self, px: int, py: int) -> bool:
@@ -1464,8 +1881,10 @@ class BreadboardCanvas(wx.Panel):
             return False
         flipped = self._ghost.flipped
         try:
-            pin_holes = comp_def.place(clicked, flipped=flipped)
+            pin_holes = self._resolve_pin_holes(comp_def, clicked, flipped)
         except (AssertionError, IndexError, KeyError):
+            return False
+        if not self._pin_holes_valid(pin_holes):
             return False
         self.push_undo()
         placed = PlacedComponent(ref=ref, type_id=comp_def.type_id,
@@ -1604,13 +2023,53 @@ class BreadboardCanvas(wx.Panel):
         self._wire_color_idx += 1
         return c
 
+    # The view is rotated for *display only*: the board is drawn normally
+    # into an off-screen bitmap, which is then rotated as a whole onto the
+    # screen (see _on_paint). All of the helpers below translate between
+    # that unrotated "logical" drawing space (where pan/zoom/layout live)
+    # and physical window-pixel space (where mouse events arrive).
+
+    def _logical_client_size(self) -> Tuple[int, int]:
+        """Client size as seen by the unrotated drawing space."""
+        cw, ch = self.GetClientSize()
+        if self._view_rotation in (90, 270):
+            return ch, cw
+        return cw, ch
+
+    def _unrotate_point(self, px: float, py: float) -> Tuple[float, float]:
+        """Map a physical window-pixel point to logical drawing-space pixels.
+
+        Exact inverse of wx.Image.Rotate90(clockwise=True), which maps a
+        source pixel (x, y) in a w×h image to (h-1-y, x) in the rotated
+        h×w image. Omitting the "-1" (as an earlier version of this method
+        did) is off by one physical pixel per turn — usually invisible, but
+        it nudges hole hit-testing right at a hole/pitch boundary, which can
+        make a click snap to the wrong hole in a rotated view.
+        """
+        turns = self._view_rotation // 90
+        if not turns:
+            return px, py
+        w, h = self.GetClientSize()
+        x, y = px, py
+        for _ in range(turns):
+            x, y = y, w - 1 - x
+            w, h = h, w
+        return x, y
+
+    def _unrotate_vector(self, dx: float, dy: float) -> Tuple[float, float]:
+        """Map a physical-space drag delta to a logical drawing-space delta."""
+        for _ in range(self._view_rotation // 90):
+            dx, dy = dy, -dx
+        return dx, dy
+
     def _board_pos(self, px: int, py: int) -> Tuple[float, float]:
         """Convert a window-pixel mouse position to board-pixel coordinates."""
+        px, py = self._unrotate_point(px, py)
         return (px - self._pan_x) / self._zoom, (py - self._pan_y) / self._zoom
 
     def _fit_view(self) -> None:
         """Reset zoom and pan so the board fits centred in the window."""
-        cw, ch = self.GetClientSize()
+        cw, ch = self._logical_client_size()
         if cw <= 0 or ch <= 0:
             return
         bw = self.layout.total_width()
@@ -1623,7 +2082,7 @@ class BreadboardCanvas(wx.Panel):
 
     def zoom_center(self, factor: float) -> None:
         """Zoom in (factor > 1) or out (factor < 1) centred on the canvas."""
-        cw, ch = self.GetClientSize()
+        cw, ch = self._logical_client_size()
         cx, cy = cw / 2, ch / 2
         new_zoom = max(0.15, min(5.0, self._zoom * factor))
         scale = new_zoom / self._zoom
@@ -1658,7 +2117,7 @@ class BreadboardCanvas(wx.Panel):
             if self._ghost is not None and (
                     self._ghost.comp_def.pin_count != 2 or self._place_pin1 is None):
                 cd = self._ghost.comp_def
-                n_rots = 4 if cd.is_module else 2
+                n_rots = 4 if (cd.is_module or (not cd.is_dip and cd.pin_count >= 3)) else 2
                 self._ghost.flipped = (self._ghost.flipped + 1) % n_rots
                 self.Refresh()
             elif self._selected_ref is not None:
@@ -1675,6 +2134,13 @@ class BreadboardCanvas(wx.Panel):
             evt.Skip()
 
     def _on_left_down(self, evt: wx.MouseEvent) -> None:
+        # Ratsnest notice's close button — screen-space, checked first so it's
+        # clickable even while a placement ghost is active.
+        if self._ratsnest_close_rect is not None \
+                and self._ratsnest_close_rect.Contains(evt.GetPosition()):
+            self._dismiss_ratsnest_notice()
+            return
+
         px, py = self._board_pos(*evt.GetPosition())
 
         # Placement mode: ghost is active — click to place, anywhere to cancel wire
@@ -1685,6 +2151,7 @@ class BreadboardCanvas(wx.Panel):
         if self.mode == MODE_WIRE:
             hole = self.layout.nearest_hole(px, py)
             if hole is not None:
+                self.SetFocus()   # grab focus so Escape/hotkeys reach the canvas
                 if self._wire_start is None:
                     self._wire_start = hole
                 else:
@@ -1716,10 +2183,15 @@ class BreadboardCanvas(wx.Panel):
 
         if self.mode == MODE_NET_HIGHLIGHT:
             # Hit-test the net-labels overlay (screen space) before board coords
-            sx, sy = evt.GetPosition()
+            sx, sy = self._unrotate_point(*evt.GetPosition())
             for rx, ry, rw, rh, row_net in self._net_label_rows:
                 if rx <= sx <= rx + rw and ry <= sy <= ry + rh:
-                    self._highlight_net_by_name(row_net)
+                    if self._net_hl_name == row_net:
+                        # Clicking the already-highlighted net again turns it off.
+                        self._net_hl_holes = set()
+                        self._net_hl_name  = ''
+                    else:
+                        self._highlight_net_by_name(row_net)
                     self.Refresh()
                     return
             # Fall back to hole proximity (board space)
@@ -1901,6 +2373,45 @@ class BreadboardCanvas(wx.Panel):
                 self.Refresh()
                 self.CaptureMouse()
                 return
+            import copy as _copy
+            # Wires render on top of components (see _draw_board), so a click
+            # near a wire — including its bend/mid-point — must grab the wire
+            # even when it visually overlaps a component's body underneath.
+            # Check wire endpoints first — takes priority over body-click/bend.
+            end_hit = self._wire_end_at(px, py)
+            if end_hit:
+                wire, which = end_hit
+                self._wire_end_drag_wire = wire
+                self._wire_end_drag_which = which
+                self._wire_end_drag_hole = getattr(wire, which)
+                self._wire_end_drag_pre_snap = self._board_snapshot()
+                self._selected_wire = wire
+                self._selected_ref = None
+                self._selected_probe = None
+                self._selected_ann_idx = None
+                self.SetFocus()
+                if not self.HasCapture():
+                    self.CaptureMouse()
+                self.Refresh()
+                return
+            wire = self._wire_at(px, py)
+            if wire:
+                self._selected_wire = wire
+                self._selected_ref = None
+                self._selected_probe = None
+                self._selected_ann_idx = None
+                self.SetFocus()
+                # Track for potential bend drag
+                self._wire_bend_candidate = wire
+                self._wire_bend_start_mouse = (px, py)
+                self._wire_bend_pre_snap = self._board_snapshot()
+                # Capture at mouse-down so the SplitterWindow sash never
+                # receives stray events during the drag.
+                if not self.HasCapture():
+                    self.CaptureMouse()
+                self.Refresh()
+                return
+
             ref = self._comp_at(px, py)
             if ref:
                 self._drag_pre_snap = self._board_snapshot()
@@ -1925,64 +2436,33 @@ class BreadboardCanvas(wx.Panel):
                 self.Refresh()
                 self.CaptureMouse()
             else:
-                import copy as _copy
-                # Check wire endpoints first — takes priority over body-click/bend
-                end_hit = self._wire_end_at(px, py)
-                if end_hit:
-                    wire, which = end_hit
-                    self._wire_end_drag_wire = wire
-                    self._wire_end_drag_which = which
-                    self._wire_end_drag_hole = getattr(wire, which)
-                    self._wire_end_drag_pre_snap = self._board_snapshot()
-                    self._selected_wire = wire
-                    self._selected_ref = None
-                    self._selected_probe = None
-                    self._selected_ann_idx = None
-                    self.SetFocus()
-                    if not self.HasCapture():
-                        self.CaptureMouse()
-                    self.Refresh()
-                    return
-                wire = self._wire_at(px, py)
-                self._selected_wire = wire
+                self._selected_wire = None
                 self._selected_ref = None
                 self._selected_probe = None
-                if wire:
-                    self._selected_ann_idx = None
+                # Check resize handles of currently selected annotation first
+                h_idx = None
+                if self._selected_ann_idx is not None:
+                    h_idx = self._handle_at(self._selected_ann_idx, px, py)
+                if h_idx is not None:
+                    # Start a resize drag on the selected annotation
+                    self._drag_ann_idx = self._selected_ann_idx
+                    self._drag_ann_orig = _copy.copy(self._annotations[self._selected_ann_idx])
+                    self._drag_ann_start_mouse = (px, py)
+                    self._drag_ann_pre_snap = self._board_snapshot()
+                    self._resize_handle_idx = h_idx
                     self.SetFocus()
-                    # Track for potential bend drag
-                    self._wire_bend_candidate = wire
-                    self._wire_bend_start_mouse = (px, py)
-                    self._wire_bend_pre_snap = self._board_snapshot()
-                    # Capture at mouse-down so the SplitterWindow sash never
-                    # receives stray events during the drag.
-                    if not self.HasCapture():
-                        self.CaptureMouse()
                 else:
-                    # Check resize handles of currently selected annotation first
-                    h_idx = None
-                    if self._selected_ann_idx is not None:
-                        h_idx = self._handle_at(self._selected_ann_idx, px, py)
-                    if h_idx is not None:
-                        # Start a resize drag on the selected annotation
-                        self._drag_ann_idx = self._selected_ann_idx
-                        self._drag_ann_orig = _copy.copy(self._annotations[self._selected_ann_idx])
+                    ann_idx = self._ann_at(px, py)
+                    if ann_idx is not None:
+                        self._selected_ann_idx = ann_idx
+                        self._drag_ann_idx = ann_idx
+                        self._drag_ann_orig = _copy.copy(self._annotations[ann_idx])
                         self._drag_ann_start_mouse = (px, py)
                         self._drag_ann_pre_snap = self._board_snapshot()
-                        self._resize_handle_idx = h_idx
+                        self._resize_handle_idx = None
                         self.SetFocus()
                     else:
-                        ann_idx = self._ann_at(px, py)
-                        if ann_idx is not None:
-                            self._selected_ann_idx = ann_idx
-                            self._drag_ann_idx = ann_idx
-                            self._drag_ann_orig = _copy.copy(self._annotations[ann_idx])
-                            self._drag_ann_start_mouse = (px, py)
-                            self._drag_ann_pre_snap = self._board_snapshot()
-                            self._resize_handle_idx = None
-                            self.SetFocus()
-                        else:
-                            self._selected_ann_idx = None
+                        self._selected_ann_idx = None
                 self.Refresh()
 
     def _on_left_dclick(self, evt: wx.MouseEvent) -> None:
@@ -2063,6 +2543,116 @@ class BreadboardCanvas(wx.Panel):
                 ann.text_color = dlg.text_color
             dlg.Destroy()
         self.Refresh()
+
+    # Sunny-11's upper blocks (sections 0/1) have three straddleable gutters
+    # instead of every other layout's one: each block's own internal gap,
+    # plus the gap between the two blocks. (row, section) pairs here are
+    # what a cross_gap=False / cross_gap=True pin lands on for that gutter.
+    _SUNNY11_GUTTERS = (
+        (('e', 0), ('f', 0)),   # left block's own internal gap
+        (('j', 0), ('a', 1)),   # between the two upper blocks
+        (('e', 1), ('f', 1)),   # right block's own internal gap
+    )
+
+    @staticmethod
+    def _sunny11_chain_pos(row: str, section: int) -> float:
+        """Position of (row, section) along the 20-row chain formed by
+        treating the two upper blocks as one strip: 0-4/5-9 = block 0's
+        top/bottom banks, 10-14/15-19 = block 1's."""
+        if row in TOP_ROWS:
+            return section * 10 + TOP_ROWS.index(row)
+        return section * 10 + 5 + BOT_ROWS.index(row)
+
+    def _sunny11_gutter_index(self, row: str, section: int) -> int:
+        """Which of the three gutters (see _SUNNY11_GUTTERS) is nearest
+        (row, section) along the chain."""
+        pos = self._sunny11_chain_pos(row, section)
+        boundaries = (4.5, 9.5, 14.5)
+        return min(range(3), key=lambda i: abs(pos - boundaries[i]))
+
+    def _sunny11_place_dip(self, anchor: TieHole, flipped, comp_def: ComponentDef,
+                            lenient: bool = False) -> Dict[int, Hole]:
+        """Cross-gap pin placement for a DIP anchored on sunny-11's upper
+        blocks: straddle whichever of the three gutters is nearest the
+        clicked hole, instead of always forcing row 'e' (which can only
+        ever reach one of the two blocks' own internal gaps).
+
+        The row->x / col->y axis swap in _init_sunny11 (portrait blocks) is a
+        transpose of the normal board's col->x / row->y mapping, and a plain
+        transpose is a mirror image, not a 90° rotation — reusing col_delta's
+        sign unchanged here would reflect the pin order instead of rotating
+        it, so col_delta is negated relative to comp_def.place()'s formula
+        to restore proper rotation and correct pin-1 placement."""
+        false_side, true_side = self._SUNNY11_GUTTERS[
+            self._sunny11_gutter_index(anchor.row, anchor.section)]
+        result: Dict[int, Hole] = {}
+        for pin, offset in comp_def.pin_offsets.items():
+            cross = (not offset.cross_gap) if flipped else offset.cross_gap
+            row, section = true_side if cross else false_side
+            col = anchor.col + (offset.col_delta if flipped else -offset.col_delta)
+            try:
+                result[pin] = TieHole(col, row, section)
+            except AssertionError:
+                if lenient:
+                    continue
+                raise
+        return result
+
+    def _resolve_pin_holes(self, comp_def: ComponentDef, anchor: TieHole, flipped,
+                            lenient: bool = False) -> Dict[int, Hole]:
+        """comp_def.place()/place_lenient(), routed through sunny-11's
+        multi-gutter DIP logic (_sunny11_place_dip) when applicable."""
+        if (comp_def.is_dip and self.layout.board_layout == 'sunny-11'
+                and anchor.section in (0, 1)):
+            return self._sunny11_place_dip(anchor, flipped, comp_def, lenient=lenient)
+        return comp_def.place_lenient(anchor, flipped=flipped) if lenient \
+            else comp_def.place(anchor, flipped=flipped)
+
+    def _pin_holes_valid(self, pin_holes) -> bool:
+        """True only if every pin resolves to a renderable position. Neither
+        TieHole nor place() reject a column past the end of the grid (only
+        col < 1 raises), so an anchor near the edge can silently produce
+        pins that fall off the board — hole_xy returns None for those, and
+        without this check the component would render with some pins
+        (and their legs) just missing instead of the placement being
+        rejected. Most visible on sunny-11's narrow 28-column blocks, where
+        dragging a DIP toward the end is easy to hit; harmless on wider
+        boards where it rarely comes up, but not layout-specific."""
+        return all(self.layout.hole_xy(h) is not None for h in pin_holes.values())
+
+    def _reposition_dragged_component(self, p: PlacedComponent, comp_def: ComponentDef,
+                                       px: int, py: int) -> None:
+        """Snap a non-module placed component's pin_holes to board position
+        (px, py) — shared by the live drag preview (_on_motion) and the
+        drop commit (_on_left_up) so both move the component the same way."""
+        new_anchor = self.layout.nearest_hole(px, py)
+        if comp_def.pin_count == 2 and not comp_def.is_dip:
+            # Preserve orientation (diagonal or rail-connected) by keeping the
+            # pixel offset between the two pins and snapping pin2 to the nearest
+            # hole at that translated position.  Works for TieHole, RailHole, or
+            # Terminal on either pin — no assumption about hole types.
+            old_p1_xy = self.layout.hole_xy(p.pin_holes.get(1))
+            old_p2_xy = self.layout.hole_xy(p.pin_holes.get(2))
+            new_p1_xy = self.layout.hole_xy(new_anchor) if new_anchor else None
+            if old_p1_xy and old_p2_xy and new_p1_xy:
+                dx = old_p2_xy[0] - old_p1_xy[0]
+                dy = old_p2_xy[1] - old_p1_xy[1]
+                new_p2 = self.layout.nearest_hole(new_p1_xy[0] + dx,
+                                                  new_p1_xy[1] + dy)
+                if new_p2 is not None:
+                    p.pin_holes = {1: new_anchor, 2: new_p2}
+            elif isinstance(new_anchor, TieHole):
+                try:
+                    p.pin_holes = comp_def.place(new_anchor, flipped=p.flipped)
+                except (AssertionError, IndexError, KeyError):
+                    pass
+        elif isinstance(new_anchor, TieHole):
+            try:
+                new_holes = self._resolve_pin_holes(comp_def, new_anchor, p.flipped)
+            except (AssertionError, IndexError, KeyError):
+                new_holes = None
+            if new_holes is not None and self._pin_holes_valid(new_holes):
+                p.pin_holes = new_holes
 
     def _on_left_up(self, evt: wx.MouseEvent) -> None:
         if self.mode == MODE_PROBE and self._probe_drag and self._placing_probe:
@@ -2165,34 +2755,8 @@ class BreadboardCanvas(wx.Panel):
                 mx, my = int(px), int(py)
                 self.board.set_module_position(self._drag_comp, mx, my)
                 self._sync_module_pins(self._drag_comp)
-            else:
-                new_anchor = self.layout.nearest_hole(px, py)
-                if p and comp_def:
-                    if comp_def.pin_count == 2 and not comp_def.is_dip:
-                        # Preserve orientation (diagonal or rail-connected) by keeping the
-                        # pixel offset between the two pins and snapping pin2 to the nearest
-                        # hole at that translated position.  Works for TieHole, RailHole, or
-                        # Terminal on either pin — no assumption about hole types.
-                        old_p1_xy = self.layout.hole_xy(p.pin_holes.get(1))
-                        old_p2_xy = self.layout.hole_xy(p.pin_holes.get(2))
-                        new_p1_xy = self.layout.hole_xy(new_anchor) if new_anchor else None
-                        if old_p1_xy and old_p2_xy and new_p1_xy:
-                            dx = old_p2_xy[0] - old_p1_xy[0]
-                            dy = old_p2_xy[1] - old_p1_xy[1]
-                            new_p2 = self.layout.nearest_hole(new_p1_xy[0] + dx,
-                                                              new_p1_xy[1] + dy)
-                            if new_p2 is not None:
-                                p.pin_holes = {1: new_anchor, 2: new_p2}
-                        elif isinstance(new_anchor, TieHole):
-                            try:
-                                p.pin_holes = comp_def.place(new_anchor, flipped=p.flipped)
-                            except (AssertionError, IndexError, KeyError):
-                                pass
-                    elif isinstance(new_anchor, TieHole):
-                        try:
-                            p.pin_holes = comp_def.place(new_anchor, flipped=p.flipped)
-                        except (AssertionError, IndexError, KeyError):
-                            pass
+            elif p and comp_def:
+                self._reposition_dragged_component(p, comp_def, px, py)
             # Push undo only if the drag actually moved the component
             if self._drag_pre_snap is not None:
                 if self._drag_pre_snap != self._board_snapshot():
@@ -2215,11 +2779,17 @@ class BreadboardCanvas(wx.Panel):
         #   Ctrl  + scroll    → horizontal pan
         PAN_STEP = 60   # pixels per wheel notch
         if evt.ShiftDown():
-            self._pan_y += PAN_STEP if rotation > 0 else -PAN_STEP
+            step = PAN_STEP if rotation > 0 else -PAN_STEP
+            dx, dy = self._unrotate_vector(0, step)
+            self._pan_x += dx
+            self._pan_y += dy
         elif evt.ControlDown():
-            self._pan_x += PAN_STEP if rotation > 0 else -PAN_STEP
+            step = PAN_STEP if rotation > 0 else -PAN_STEP
+            dx, dy = self._unrotate_vector(step, 0)
+            self._pan_x += dx
+            self._pan_y += dy
         else:
-            cx, cy = evt.GetPosition()
+            cx, cy = self._unrotate_point(*evt.GetPosition())
             factor = 1.12 if rotation > 0 else (1.0 / 1.12)
             new_zoom = max(0.15, min(5.0, self._zoom * factor))
             scale = new_zoom / self._zoom
@@ -2246,10 +2816,12 @@ class BreadboardCanvas(wx.Panel):
             self.SetCursor(wx.Cursor(wx.CURSOR_ARROW))
 
     def _on_motion(self, evt: wx.MouseEvent) -> None:
+        self._pointer_over_canvas = True   # EVT_MOTION only fires while genuinely over the canvas
         if self._mid_drag:
             pos = evt.GetPosition()
             dx = pos.x - self._mid_drag_start[0]
             dy = pos.y - self._mid_drag_start[1]
+            dx, dy = self._unrotate_vector(dx, dy)
             self._pan_x = self._pan_at_drag_start[0] + dx
             self._pan_y = self._pan_at_drag_start[1] + dy
             self.Refresh()
@@ -2299,7 +2871,7 @@ class BreadboardCanvas(wx.Panel):
             self.Refresh()
             return
 
-        # Live-move a dragged module
+        # Live-move a dragged component
         if self._drag_comp:
             p = self.board.get_placement(self._drag_comp)
             comp_def = ALL_DEFS.get(p.type_id) if p else None
@@ -2308,16 +2880,16 @@ class BreadboardCanvas(wx.Panel):
                 my = int(py - self._drag_offset[1])
                 self.board.set_module_position(self._drag_comp, mx, my)
                 self._sync_module_pins(self._drag_comp)
-            elif comp_def and comp_def.pin_count >= 3 and not comp_def.is_dip:
-                # Live snap for TO-92: move all legs together during drag
+            elif comp_def:
+                # Live snap while dragging — was previously only done for
+                # TO-92-style (>=3 pin, non-DIP) parts, leaving DIP ICs and
+                # 2-pin parts (R/C/L/D/LED) frozen in place with no visual
+                # feedback until mouse-up. Reuse the same repositioning logic
+                # that _on_left_up uses to commit the final drop, for all
+                # non-module component types.
                 tpx = px - self._drag_offset[0]
                 tpy = py - self._drag_offset[1]
-                new_anchor = self.layout.nearest_hole(tpx, tpy)
-                if isinstance(new_anchor, TieHole):
-                    try:
-                        p.pin_holes = comp_def.place(new_anchor, flipped=p.flipped)
-                    except (AssertionError, IndexError, KeyError):
-                        pass
+                self._reposition_dragged_component(p, comp_def, tpx, tpy)
             self.Refresh()
             return
 
@@ -2351,17 +2923,7 @@ class BreadboardCanvas(wx.Panel):
             self.Refresh()
             return
 
-        self._ghost_pos = (px, py)
-        if self._ghost:
-            comp_def = self._ghost.comp_def
-            if comp_def.is_module:
-                pass  # module ghost always follows mouse; no snap needed
-            else:
-                anchor = self.layout.nearest_hole(px, py)
-                if comp_def.pin_count == 2 and not comp_def.is_dip:
-                    self._ghost.anchor = anchor  # accept tie strip or power rail
-                else:
-                    self._ghost.anchor = anchor if isinstance(anchor, TieHole) else None
+        self._update_ghost_follow(px, py)
         if self.mode == MODE_PROBE:
             self._probe_hover = self.layout.nearest_probe_hole(px, py)
         if self.mode == MODE_NET_PROBE:
@@ -2419,7 +2981,8 @@ class BreadboardCanvas(wx.Panel):
         self.Refresh()
 
     def _flip_component(self, ref: str) -> None:
-        """Flip a placed component (modules: mirror left/right; DIP/3-pin: rotate 180°)."""
+        """Flip/rotate a placed component (modules: mirror left/right; DIP: rotate
+        180°; single-bank 3+ pin parts — TO-92, sliders, POT: rotate 90° CW)."""
         placed = self.board.get_placement(ref)
         if not placed:
             return
@@ -2438,13 +3001,47 @@ class BreadboardCanvas(wx.Panel):
         pin1 = placed.pin_holes.get(1)
         if not isinstance(pin1, TieHole):
             return
+
+        if not comp_def.is_dip and comp_def.pin_count >= 3:
+            # 90° CW steps, pivoting on pin 1 (which always resolves to the
+            # anchor hole itself, at any rotation). If a step lands a pin
+            # outside its row bank, skip it and keep cycling — never gets
+            # stuck on a rotation that isn't valid at the current spot.
+            for _ in range(4):
+                new_flipped = (placed.flipped + 1) % 4
+                try:
+                    new_holes = comp_def.place(pin1, flipped=new_flipped)
+                except (AssertionError, IndexError, KeyError):
+                    placed.flipped = new_flipped
+                    continue
+                placed.pin_holes = new_holes
+                placed.flipped = new_flipped
+                self._notify_board_changed()
+                break
+            self.Refresh()
+            return
+
         new_flipped = not placed.flipped
         if comp_def.is_dip:
             n = comp_def.footprint_cols() - 1
-            new_anchor = TieHole(pin1.col + (n if new_flipped else -n), 'e', pin1.section)
-        elif comp_def.pin_count >= 3:
-            n = comp_def.pin_count - 1   # span = pin_count - 1
-            new_anchor = TieHole(pin1.col + (n if new_flipped else -n), pin1.row, pin1.section)
+            is_sunny11_upper = (self.layout.board_layout == 'sunny-11'
+                                 and pin1.section in (0, 1))
+            if is_sunny11_upper:
+                # _sunny11_place_dip negates col_delta's sign relative to
+                # comp_def.place() (see its docstring), so the anchor offset
+                # that keeps the footprint in place across a flip is also
+                # negated here — otherwise the IC jumps to a different span
+                # of columns instead of flipping in place.
+                new_col = pin1.col + (-n if new_flipped else n)
+                # Keep straddling the same gutter pin1 is already on, rather
+                # than assuming row 'e' of the same section (only true for
+                # the two blocks' own internal gutters, not the middle one).
+                false_row, false_section = self._SUNNY11_GUTTERS[
+                    self._sunny11_gutter_index(pin1.row, pin1.section)][0]
+                new_anchor = TieHole(new_col, false_row, false_section)
+            else:
+                new_col = pin1.col + (n if new_flipped else -n)
+                new_anchor = TieHole(new_col, 'e', pin1.section)
         elif comp_def.pin_count == 2:
             # For 2-pin axial: use pin2 as new anchor and toggle flipped.
             # place(pin2, flipped=True)  → pin1 at pin2.col, pin2 at pin2.col-span
@@ -2457,9 +3054,11 @@ class BreadboardCanvas(wx.Panel):
         else:
             return
         try:
-            placed.pin_holes = comp_def.place(new_anchor, flipped=new_flipped)
-            placed.flipped = new_flipped
-            self._notify_board_changed()
+            new_holes = self._resolve_pin_holes(comp_def, new_anchor, new_flipped)
+            if self._pin_holes_valid(new_holes):
+                placed.pin_holes = new_holes
+                placed.flipped = new_flipped
+                self._notify_board_changed()
         except (AssertionError, IndexError, KeyError):
             pass
         self.Refresh()
@@ -2673,26 +3272,109 @@ class BreadboardCanvas(wx.Panel):
         if not self._pan_initialized:
             self._fit_view()
             self._pan_initialized = True
-        dc.SetUserScale(self._zoom, self._zoom)
-        dc.SetDeviceOrigin(int(self._pan_x), int(self._pan_y))
-        self._draw_board(dc)
 
-    def _draw_board(self, dc: wx.DC) -> None:
+        if not self._view_rotation:
+            dc.SetUserScale(self._zoom, self._zoom)
+            dc.SetDeviceOrigin(int(self._pan_x), int(self._pan_y))
+            self._draw_board(dc)
+            return
+
+        # Rotated view: draw normally into an off-screen bitmap sized to the
+        # unrotated ("logical") canvas, then rotate the whole bitmap onto the
+        # screen. This keeps every drawing routine in canvas.py untouched —
+        # they only ever see the unrotated logical space.
+        lw, lh = self._logical_client_size()
+        if lw <= 0 or lh <= 0:
+            return
+        # Plain, non-alpha bitmap: most drawing here goes through plain wx.DC
+        # calls (holes, rails, wires, terminals), which on MSW don't reliably
+        # write a meaningful alpha byte. An earlier attempt to fix a Windows
+        # rendering bug made this bitmap alpha-aware (depth=32 + UseAlpha())
+        # on the theory that wx.GraphicsContext-drawn component bodies needed
+        # it — instead it made everything drawn via plain DC calls composite
+        # as transparent against the alpha-aware GC-drawn bodies, i.e. the
+        # opposite failure (everything but components disappearing). Keep
+        # this bitmap fully opaque.
+        bmp = wx.Bitmap(lw, lh)
+        mdc = wx.MemoryDC(bmp)
+        mdc.SetBackground(wx.Brush(wx.SystemSettings.GetColour(wx.SYS_COLOUR_BTNFACE)))
+        mdc.Clear()
+        mdc.SetUserScale(self._zoom, self._zoom)
+        mdc.SetDeviceOrigin(int(self._pan_x), int(self._pan_y))
+        try:
+            self._draw_board(mdc, include_net_labels=False)
+        except Exception:
+            # Don't let a failed rotated-frame render silently blank the
+            # canvas — log it (visible in the standalone console / KiCad's
+            # scripting console) and fall back to an unrotated draw so the
+            # board is still usable while this gets diagnosed.
+            import traceback
+            traceback.print_exc()
+            mdc.SelectObject(wx.NullBitmap)
+            dc.SetUserScale(self._zoom, self._zoom)
+            dc.SetDeviceOrigin(int(self._pan_x), int(self._pan_y))
+            self._draw_board(dc)
+            return
+        mdc.SelectObject(wx.NullBitmap)
+
+        # Rotate the rendered bitmap onto the screen DC via an affine
+        # transform rather than wx.Image.Rotate90() (a CPU-side per-pixel
+        # copy). Diagnostics confirmed the off-screen bitmap's pixel data is
+        # correct at draw time — brush/pen colors read back exactly as set —
+        # so a bug surviving into the visible result has to be in this
+        # rotate/blit step. Rotate90() implementations have a history of
+        # edge/stride bugs on some Windows/wx builds, and the binding posts
+        # sit close to the edge of the logical canvas — exactly where such a
+        # bug would show up while leaving the much larger central board
+        # content untouched, matching what was reported. GraphicsContext's
+        # Translate+Rotate+DrawBitmap draws the whole bitmap as one
+        # hardware/GDI+-accelerated affine blit instead, with no per-pixel
+        # CPU copy to have an edge case in.
+        turns = (self._view_rotation // 90) % 4
+        gc = _make_gc(dc)
+        if gc is not None:
+            angle, tx, ty = {
+                0: (0.0, 0, 0),
+                1: (math.pi / 2, lh - 1, 0),
+                2: (math.pi, lw - 1, lh - 1),
+                3: (3 * math.pi / 2, 0, lw - 1),
+            }[turns]
+            gc.PushState()
+            gc.Translate(tx, ty)
+            gc.Rotate(angle)
+            gc.DrawBitmap(bmp, 0, 0, lw, lh)
+            gc.PopState()
+        else:
+            # Fallback for DCs that don't support GraphicsContext.
+            image = bmp.ConvertToImage()
+            for _ in range(turns):
+                image = image.Rotate90(clockwise=True)
+            dc.DrawBitmap(wx.Bitmap(image), 0, 0)
+
+        # Legend stays screen-fixed (not baked into the rotated bitmap) so it
+        # keeps a constant on-screen position/orientation regardless of view rotation.
+        self._draw_net_labels(dc)
+        self._draw_ratsnest_notice(dc)
+
+    def _draw_board(self, dc: wx.DC, include_net_labels: bool = True) -> None:
         lay = self.layout
 
         if self.show_baseboard:
             self._draw_baseboard(dc)
 
-        # Per-section board bodies, rails, holes
-        for section in range(lay.sections):
-            self._draw_section_body(dc, section)
-            if lay.has_rails:
-                self._draw_rails(dc, section)
-            self._draw_center_gap(dc, section)
-            self._draw_holes(dc, section)
+        if lay.board_layout == 'sunny-11':
+            self._draw_board_sunny11(dc)
+        else:
+            # Per-section board bodies, rails, holes
+            for section in range(lay.sections):
+                self._draw_section_body(dc, section)
+                if lay.has_rails:
+                    self._draw_rails(dc, section)
+                self._draw_center_gap(dc, section)
+                self._draw_holes(dc, section)
 
-        if lay.board_layout in ('triple', 'double_rails'):
-            self._draw_vert_rails(dc)
+            if lay.board_layout in ('triple', 'double_rails'):
+                self._draw_vert_rails(dc)
 
         self._draw_components(dc)
         if self._pin_drag_ref is not None:
@@ -2700,26 +3382,34 @@ class BreadboardCanvas(wx.Panel):
         self._draw_wires(dc)
         if self._wire_end_drag_wire is not None:
             self._draw_wire_end_drag_preview(dc)
+
         if self.show_binding_posts:
             self._draw_terminals(dc)
         self._draw_probes(dc)
         self._draw_scope_probes(dc)
 
         if self._ghost:
+            if self.show_ratsnest:
+                self._draw_ratsnest(dc)
             self._draw_ghost(dc)
 
         if self._wire_start:
+            if self.show_ratsnest:
+                self._draw_wire_ratsnest(dc)
             self._draw_wire_start_indicator(dc)
 
         self._draw_annotations(dc)
-        self._draw_column_labels(dc)
+        if lay.board_layout != 'sunny-11':
+            self._draw_column_labels(dc)
         self._draw_validation_icons(dc)
         self._draw_sim_overlay(dc)
 
         # Legend is drawn in screen coordinates (reset transform first)
         dc.SetUserScale(1.0, 1.0)
         dc.SetDeviceOrigin(0, 0)
-        self._draw_net_labels(dc)
+        if include_net_labels:
+            self._draw_net_labels(dc)
+            self._draw_ratsnest_notice(dc)
 
     def _draw_baseboard(self, dc: wx.DC) -> None:
         lay = self.layout
@@ -3039,6 +3729,142 @@ class BreadboardCanvas(wx.Panel):
             dc.SetPen(wx.Pen('#222222', 1))
         dc.DrawCircle(cx, cy, HOLE_R)
 
+    def _draw_s11_rail(self, dc: wx.DC, xs: List[int], y: int, color: str, symbol: str,
+                       rail_name: str, section: int = 0, symbol_ends: str = 'both',
+                       line_edge: str = 'upper') -> None:
+        """symbol_ends restricts the +/- end labels to 'left', 'right', or 'both' —
+        used to avoid two labels colliding where a rail is split (e.g. V3 | V4).
+
+        line_edge ('upper'/'lower') picks which side of this rail's own strip
+        the solid_line marker sits on. It's the caller's job to pass whichever
+        edge is away from this rail's paired rail — the top bank runs minus
+        then plus (top-to-bottom) but the bottom bank runs plus then minus
+        (see _init_sunny11), so that's not something this method can infer
+        from the +/- symbol alone."""
+        if not xs:
+            return
+        strip_h = RAIL_H - 4
+        x_left  = min(xs) - PITCH // 2
+        x_right = max(xs) + PITCH // 2
+
+        if self.rail_style == 'bbrd_classic':
+            # One rounded rect per group of 5 holes, same as the standard boards
+            for i in range(0, len(xs), 5):
+                group = xs[i:i + 5]
+                gx_left  = group[0]  - PITCH // 2
+                gx_right = group[-1] + PITCH // 2
+                stripe = wx.Rect(gx_left, y - strip_h // 2, gx_right - gx_left, strip_h)
+                dc.SetBrush(wx.Brush(color))
+                dc.SetPen(wx.Pen(color, 0))
+                dc.DrawRoundedRectangle(stripe, 3)
+
+        elif self.rail_style == 'bbrd_modern':
+            modern_h = RAIL_H
+            stripe = wx.Rect(x_left, y - modern_h // 2, x_right - x_left, modern_h)
+            dc.SetBrush(wx.TRANSPARENT_BRUSH)
+            dc.SetPen(wx.Pen(color, 2))
+            dc.DrawRoundedRectangle(stripe, 5)
+
+        elif self.rail_style == 'solid_line':
+            line_h = 3
+            line_y = (y - RAIL_H // 2) if line_edge == 'upper' else (y + RAIL_H // 2 - line_h)
+            stripe = wx.Rect(x_left, line_y, x_right - x_left, line_h)
+            dc.SetBrush(wx.Brush(color))
+            dc.SetPen(wx.Pen(color, 0))
+            dc.DrawRectangle(stripe)
+
+        # 'none' draws neither stripe nor line — holes and end symbols only.
+
+        for idx, x in enumerate(xs, 1):
+            self._draw_hole_dot(dc, x, y, RailHole(rail_name, idx, section))
+        dc.SetFont(wx.Font(8, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
+        dc.SetTextForeground('#444444')
+        if symbol_ends in ('left', 'both'):
+            dc.DrawText(symbol, x_left - PITCH // 2, y - 7)
+        if symbol_ends in ('right', 'both'):
+            dc.DrawText(symbol, x_right + 4, y - 7)
+
+    def _draw_board_sunny11(self, dc: wx.DC) -> None:
+        """Bespoke paint path for the sunny-11 layout: two portrait tie-blocks
+        (V1/V2) side by side over one landscape tie-block (V3/V4)."""
+        lay = self.layout
+
+        # One continuous board body (the real hardware is a single moulded
+        # piece with three tie-hole "slots" cut into it, not separate boards
+        # placed side by side) — internal divisions are drawn as grooves in
+        # the same body colour, never as gaps showing the canvas background.
+        overall_left  = min(lay._s11_block_left[0], lay._s11_lower_col_x[1]) - PITCH
+        overall_right = max(lay._s11_block_left[1] + lay._s11_block_w,
+                             lay._s11_lower_col_x[SUNNY11_LOWER_COLS]) + PITCH
+        overall_top    = lay._s11_block_top - MARGIN // 2
+        overall_bottom = lay._s11_lower_bottom
+        board_rect = wx.Rect(overall_left, overall_top,
+                             overall_right - overall_left, overall_bottom - overall_top)
+        dc.SetBrush(wx.Brush('#e8e0c8'))
+        dc.SetPen(wx.Pen('#b0a090', 1))
+        dc.DrawRoundedRectangle(board_rect, 8)
+
+        # Groove between the V1 and V2 slots — same vertical extent as the
+        # internal a-e/f-j gaps (tie area only, not up through the rails),
+        # and inset half a pitch on each side, in between the neighbouring
+        # holes rather than spanning hole-centre to hole-centre.
+        groove_rect = wx.Rect(
+            lay._s11_block_left[0] + lay._s11_block_w + lay._s11_row_pitch // 2,
+            lay._s11_col_y[1] - PITCH,
+            lay._s11_gap_block_x - lay._s11_row_pitch,
+            lay._s11_col_y[SUNNY11_UPPER_COLS] - lay._s11_col_y[1] + 2 * PITCH,
+        )
+        dc.SetBrush(wx.Brush('#c0b898'))
+        dc.SetPen(wx.Pen('#a09080', 1))
+        dc.DrawRectangle(groove_rect)
+
+        # Horizontal centre gap (a-e | f-j) in each portrait block
+        bank_w = (len(TOP_ROWS) - 1) * lay._s11_row_pitch
+        for section in (0, 1):
+            left = lay._s11_block_left[section]
+            gap_rect = wx.Rect(
+                left + bank_w + lay._s11_row_pitch // 2,
+                lay._s11_col_y[1] - PITCH,
+                lay._s11_gap_upper - lay._s11_row_pitch,
+                lay._s11_col_y[SUNNY11_UPPER_COLS] - lay._s11_col_y[1] + 2 * PITCH,
+            )
+            dc.SetBrush(wx.Brush('#c0b898'))
+            dc.SetPen(wx.Pen('#a09080', 1))
+            dc.DrawRectangle(gap_rect)
+
+        # No extra marker needed at the V3/V4 split: the two rail stripes
+        # (drawn below) are already independent shapes with a real gap
+        # between them, same as the V1/V2 rails above — an added notch here
+        # only showed up as an odd dip in the plus rail's edge.
+
+        # Rails. line_edge follows each rail's position within its own pair
+        # (top bank: minus above plus; bottom bank: plus above minus — see
+        # _init_sunny11), not its +/- identity, so the solid_line marker
+        # always ends up on the outer edge of the pair on both banks.
+        self._draw_s11_rail(dc, lay._s11_minus_top_x, lay._s11_minus_y,
+                             '#2244cc', '−', 'sunny_top_minus', line_edge='upper')
+        self._draw_s11_rail(dc, lay._s11_plus_rail_x[0], lay._s11_plus_y,
+                             '#cc2222', '+', 'top_plus', 0, symbol_ends='left', line_edge='lower')
+        self._draw_s11_rail(dc, lay._s11_plus_rail_x[1], lay._s11_plus_y,
+                             '#cc2222', '+', 'top_plus', 1, symbol_ends='right', line_edge='lower')
+        self._draw_s11_rail(dc, lay._s11_lower_minus_x, lay._s11_lower_minus_y,
+                             '#2244cc', '−', 'sunny_bot_minus', line_edge='lower')
+        self._draw_s11_rail(dc, lay._s11_lower_plus_x['lower_plus_left'], lay._s11_lower_plus_y,
+                             '#cc2222', '+', 'lower_plus_left', 2, symbol_ends='left', line_edge='upper')
+        self._draw_s11_rail(dc, lay._s11_lower_plus_x['lower_plus_right'], lay._s11_lower_plus_y,
+                             '#cc2222', '+', 'lower_plus_right', 2, symbol_ends='right', line_edge='upper')
+
+        # Tie holes
+        for section in (0, 1):
+            left = lay._s11_block_left[section]
+            for row, rx_off in lay._s11_row_x.items():
+                rx = left + rx_off
+                for col, ry in lay._s11_col_y.items():
+                    self._draw_hole_dot(dc, rx, ry, TieHole(col, row, section))
+        for row, ry in lay._s11_lower_row_y.items():
+            for col, cx in lay._s11_lower_col_x.items():
+                self._draw_hole_dot(dc, cx, ry, TieHole(col, row, 2))
+
     def _draw_pin_drag_preview(self, dc: wx.DC) -> None:
         """Draw the component being pin-dragged at its current (live) position."""
         ref     = self._pin_drag_ref
@@ -3161,7 +3987,10 @@ class BreadboardCanvas(wx.Panel):
     def _rail_crossing_segments(self, xy1, xy2):
         """Yield (p1, p2) subsegments of the line that fall inside horizontal rail strips."""
         lay = self.layout
-        if not lay.has_rails:
+        if not lay.has_rails or lay.board_layout == 'sunny-11':
+            # sunny-11's rails don't use section_rail_y()/_section_top (see
+            # _init_sunny11) — no white contrast border under crossing wires
+            # on this layout, same as it never had one before rails existed.
             return
         x1, y1 = xy1
         x2, y2 = xy2
@@ -3335,9 +4164,24 @@ class BreadboardCanvas(wx.Panel):
         dc.SetPen(wx.Pen(border_color, 2 if selected else 1))
 
         if comp_def.is_dip:
-            body_rect = wx.Rect(x_min - 4, y_min - 2, x_max - x_min + 8, y_max - y_min + 4)
+            # Normal boards map column->x, row->y, so the DIP's column span
+            # (many columns) dwarfs its row-crossing span (e/f, one row
+            # apart) and the body reads as wide/horizontal. sunny-11's upper
+            # portrait blocks map row->x, column->y instead (see
+            # _init_sunny11), so the same DIP comes out tall/vertical there —
+            # detect which from the real resolved pixel spread (as the TO-92
+            # ghost/body code already does) rather than assuming column=x.
+            dip_horiz = (x_max - x_min) >= (y_max - y_min)
+            if dip_horiz:
+                body_rect = wx.Rect(x_min - 4, y_min - 2, x_max - x_min + 8, y_max - y_min + 4)
+            else:
+                body_rect = wx.Rect(x_min - 2, y_min - 4, x_max - x_min + 4, y_max - y_min + 8)
 
-            # Legs: small grey tabs extending above/below the body at each pin
+            # Legs: small grey tabs extending out from the body at each pin,
+            # perpendicular to the body's long axis. TOP_ROWS always sit on
+            # the lower-coordinate side of the row-crossing axis (y normally,
+            # x on sunny-11) and BOT_ROWS on the higher-coordinate side, so
+            # this holds regardless of orientation or flip state.
             dc.SetBrush(wx.Brush('#888888'))
             dc.SetPen(wx.Pen('#555555', 1))
             for hole in placed.pin_holes.values():
@@ -3345,10 +4189,18 @@ class BreadboardCanvas(wx.Panel):
                 if xy is None:
                     continue
                 hx, hy = xy
-                if isinstance(hole, TieHole) and hole.row in TOP_ROWS:
-                    dc.DrawRectangle(hx - 1, body_rect.GetTop() - 6, 3, 7)
-                elif isinstance(hole, TieHole) and hole.row in BOT_ROWS:
-                    dc.DrawRectangle(hx - 1, body_rect.GetBottom() - 1, 3, 7)
+                is_top = isinstance(hole, TieHole) and hole.row in TOP_ROWS
+                is_bot = isinstance(hole, TieHole) and hole.row in BOT_ROWS
+                if dip_horiz:
+                    if is_top:
+                        dc.DrawRectangle(hx - 1, body_rect.GetTop() - 6, 3, 7)
+                    elif is_bot:
+                        dc.DrawRectangle(hx - 1, body_rect.GetBottom() - 1, 3, 7)
+                else:
+                    if is_top:
+                        dc.DrawRectangle(body_rect.GetLeft() - 6, hy - 1, 7, 3)
+                    elif is_bot:
+                        dc.DrawRectangle(body_rect.GetRight() - 1, hy - 1, 7, 3)
 
             # IC body (drawn over the inner part of the legs)
             dc.SetBrush(wx.Brush(body_color))
@@ -3372,11 +4224,14 @@ class BreadboardCanvas(wx.Panel):
                     else:
                         dc.SetBrush(wx.Brush('#ffffff'))
                         dc.SetPen(wx.Pen('#333333', 1))
-                    if isinstance(pin1_hole, TieHole) and pin1_hole.row in TOP_ROWS:
-                        dot_y = body_rect.GetY() + 12
+                    p1_is_top = isinstance(pin1_hole, TieHole) and pin1_hole.row in TOP_ROWS
+                    if dip_horiz:
+                        dot_x = pin1_xy[0]
+                        dot_y = body_rect.GetY() + 12 if p1_is_top else body_rect.GetBottom() - 12
                     else:
-                        dot_y = body_rect.GetBottom() - 12
-                    dc.DrawCircle(pin1_xy[0], dot_y, 3)
+                        dot_y = pin1_xy[1]
+                        dot_x = body_rect.GetX() + 12 if p1_is_top else body_rect.GetRight() - 12
+                    dc.DrawCircle(dot_x, dot_y, 3)
             if fn_map:
                 # Rotated text via GraphicsContext.
                 # Top-side labels lean right (75° CW), bottom-side lean left (105° CCW),
@@ -3386,7 +4241,11 @@ class BreadboardCanvas(wx.Panel):
                 # screen_x_centre = tx - sinθ*(ly + th/2) = tx iff ly = -th/2).
                 _ANGLE_TOP = math.pi * 105 / 180  # 105° CW  → down-left
                 _ANGLE_BOT = math.pi * 75 / 180   # 75° CCW  → up-right
-                _half_h = body_rect.GetHeight() / 2
+                _half_h = (body_rect.GetWidth() if not dip_horiz else body_rect.GetHeight()) / 2
+                # On sunny-11's transposed portrait blocks the body's long
+                # axis is vertical, so labels lean off horizontal (base 0°)
+                # instead of off vertical (base 90°) to stay legible.
+                _base_rot = 0.0 if not dip_horiz else math.pi / 2
                 gc_lbl = _make_gc(dc)
                 if gc_lbl is not None:
                     font_fn = wx.Font(4, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL,
@@ -3398,19 +4257,27 @@ class BreadboardCanvas(wx.Panel):
                             continue
                         label = fn_map.get(pin_num) or str(pin_num)
                         tw, th = gc_lbl.GetTextExtent(label)
-                        hx = float(xy[0])
+                        hx, hy = float(xy[0]), float(xy[1])
                         is_top = isinstance(hole, TieHole) and hole.row in TOP_ROWS
                         is_bot = isinstance(hole, TieHole) and hole.row in BOT_ROWS
                         if not is_top and not is_bot:
                             continue
                         gc_lbl.PushState()
                         tilt = tw > _half_h
-                        if is_top:
-                            gc_lbl.Translate(hx, float(body_rect.GetTop() + 2))
-                            gc_lbl.Rotate(_ANGLE_TOP if tilt else math.pi / 2)
+                        if dip_horiz:
+                            if is_top:
+                                gc_lbl.Translate(hx, float(body_rect.GetTop() + 2))
+                                gc_lbl.Rotate(_ANGLE_TOP if tilt else _base_rot)
+                            else:
+                                gc_lbl.Translate(hx, float(body_rect.GetBottom() - 2))
+                                gc_lbl.Rotate(-(_ANGLE_BOT if tilt else _base_rot))
                         else:
-                            gc_lbl.Translate(hx, float(body_rect.GetBottom() - 2))
-                            gc_lbl.Rotate(-(_ANGLE_BOT if tilt else math.pi / 2))
+                            if is_top:
+                                gc_lbl.Translate(float(body_rect.GetLeft() + 2), hy)
+                                gc_lbl.Rotate(_ANGLE_TOP - math.pi / 2 if tilt else _base_rot)
+                            else:
+                                gc_lbl.Translate(float(body_rect.GetRight() - 2), hy)
+                                gc_lbl.Rotate(-(_ANGLE_BOT - math.pi / 2) if tilt else _base_rot)
                         gc_lbl.DrawText(label, 0, -th / 2)
                         gc_lbl.PopState()
                 else:
@@ -3423,11 +4290,19 @@ class BreadboardCanvas(wx.Panel):
                             continue
                         label = fn_map.get(pin_num) or str(pin_num)
                         tw, th = dc.GetTextExtent(label)
-                        hx = xy[0]
-                        if isinstance(hole, TieHole) and hole.row in TOP_ROWS:
-                            dc.DrawText(label, hx - tw // 2, body_rect.GetTop() + 2)
-                        elif isinstance(hole, TieHole) and hole.row in BOT_ROWS:
-                            dc.DrawText(label, hx - tw // 2, body_rect.GetBottom() - th - 2)
+                        hx, hy = xy
+                        is_top = isinstance(hole, TieHole) and hole.row in TOP_ROWS
+                        is_bot = isinstance(hole, TieHole) and hole.row in BOT_ROWS
+                        if dip_horiz:
+                            if is_top:
+                                dc.DrawText(label, hx - tw // 2, body_rect.GetTop() + 2)
+                            elif is_bot:
+                                dc.DrawText(label, hx - tw // 2, body_rect.GetBottom() - th - 2)
+                        else:
+                            if is_top:
+                                dc.DrawText(label, body_rect.GetLeft() + 2, hy - th // 2)
+                            elif is_bot:
+                                dc.DrawText(label, body_rect.GetRight() - tw - 2, hy - th // 2)
             else:
                 dc.SetFont(wx.Font(5, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL,
                                    wx.FONTWEIGHT_NORMAL))
@@ -3438,11 +4313,19 @@ class BreadboardCanvas(wx.Panel):
                         continue
                     label = str(pin_num)
                     tw, th = dc.GetTextExtent(label)
-                    hx = xy[0]
-                    if isinstance(hole, TieHole) and hole.row in TOP_ROWS:
-                        dc.DrawText(label, hx - tw // 2, body_rect.GetTop() + 2)
-                    elif isinstance(hole, TieHole) and hole.row in BOT_ROWS:
-                        dc.DrawText(label, hx - tw // 2, body_rect.GetBottom() - th - 2)
+                    hx, hy = xy
+                    is_top = isinstance(hole, TieHole) and hole.row in TOP_ROWS
+                    is_bot = isinstance(hole, TieHole) and hole.row in BOT_ROWS
+                    if dip_horiz:
+                        if is_top:
+                            dc.DrawText(label, hx - tw // 2, body_rect.GetTop() + 2)
+                        elif is_bot:
+                            dc.DrawText(label, hx - tw // 2, body_rect.GetBottom() - th - 2)
+                    else:
+                        if is_top:
+                            dc.DrawText(label, body_rect.GetLeft() + 2, hy - th // 2)
+                        elif is_bot:
+                            dc.DrawText(label, body_rect.GetRight() - tw - 2, hy - th // 2)
 
             # Ref + value label centered in the IC body
             cx = body_rect.GetX() + body_rect.GetWidth() // 2
@@ -3482,73 +4365,108 @@ class BreadboardCanvas(wx.Panel):
         else:
             # 3-pin and 4-pin components
             _SLIDER_TYPES = frozenset({'SPDT', 'SP3T'})
-            _TO92_TYPES = frozenset({'NPN', 'PNP', 'JFET_N', 'JFET_P', 'BS170', 'NMOS', 'PMOS'})
             if placed.type_id in _SLIDER_TYPES:
-                sample_hole = next(iter(placed.pin_holes.values()))
-                in_top = isinstance(sample_hole, TieHole) and sample_hole.row in TOP_ROWS
+                # See _draw_slider_switch / TO-92's comment above: axis and
+                # side are derived from `flipped` + the real resolved pixel
+                # spread, not from which row bank the pin landed in.
+                turns = placed.flipped % 4
+                primary = turns < 2
+                horiz = (x_max - x_min) >= (y_max - y_min)
                 self._draw_slider_switch(dc, comp_def, placed, ref,
-                                         x_min, x_max, y_min, y_max, in_top, selected)
+                                         x_min, x_max, y_min, y_max, primary, horiz, selected)
                 return
-            elif placed.type_id in _TO92_TYPES:
+            elif _is_to92_type(placed.type_id):
                 # Ammo-pack style TO-92: small D-shaped body elevated above holes,
                 # three thin wire leads sticking out to each pin hole.
-                sample_hole = next(iter(placed.pin_holes.values()))
-                in_top = isinstance(sample_hole, TieHole) and sample_hole.row in TOP_ROWS
-
-                # Fixed body size centered on the middle pin hole
-                cx_mid    = float((x_min + x_max) // 2)
+                #
+                # `placed.flipped` (0-3, via PinOffset.resolve's quad_rotate)
+                # decides which holes the pins occupy, but which *screen* axis
+                # that produces depends on the board: normal boards map column
+                # to x, but sunny-11's portrait blocks map column to y — so the
+                # drawing can't infer horizontal-vs-vertical from `flipped`
+                # directly. Instead it measures the real resolved pixel spread
+                # (`horiz`) and only uses `flipped` to pick which of the two
+                # sides along that axis the dome faces (`primary`) — turns 0/1
+                # are the "primary" member of their mirror pair (0↔2, 1↔3),
+                # 2/3 the other, regardless of which axis is actually active.
+                turns = placed.flipped % 4
+                primary = turns < 2
+                cx_mid = (x_min + x_max) / 2.0
+                cy_mid = (y_min + y_max) / 2.0
                 body_half = 12.0   # half-width → body is 24 px wide
                 r_body    = body_half
-                # Flat face sits at the hole-row centre (halfway into the hole circle)
-                flat_y    = float(y_min) if in_top else float(y_max)
-
-                # Converging leads from each pin hole to the flat face of the body.
-                # flat_y == pin_y so outer leads are short horizontal stubs.
                 inset     = 3.0
                 step      = (2 * body_half - 2 * inset) / 2
-                attach_xs = [cx_mid - body_half + inset + i * step for i in range(3)]
-                pin_xs    = sorted(xy[0] for xy in holes)
-                pin_y     = y_min if in_top else y_max
-                dc.SetPen(wx.Pen('#888888', 3))
-                for px, ax in zip(pin_xs, attach_xs):
-                    dc.DrawLine(px, pin_y, int(ax), int(flat_y))
+                attach    = [-body_half + inset + i * step for i in range(3)]
 
-                # D-shaped body
-                dome_up = not bool(placed.flipped)
+                horiz = (x_max - x_min) >= (y_max - y_min)
+                if horiz:
+                    origin = (cx_mid, float(y_min) if primary else float(y_max))
+                    shared = y_min if primary else y_max
+                    pin_coords = sorted(xy[0] for xy in holes)
+                    attach_pts = [cx_mid + a for a in attach]
+                    dc.SetPen(wx.Pen('#888888', 3))
+                    for pc, ac in zip(pin_coords, attach_pts):
+                        dc.DrawLine(int(pc), shared, int(ac), int(origin[1]))
+                else:
+                    origin = (float(x_max) if primary else float(x_min), cy_mid)
+                    shared = x_max if primary else x_min
+                    pin_coords = sorted(xy[1] for xy in holes)
+                    attach_pts = [cy_mid + a for a in attach]
+                    dc.SetPen(wx.Pen('#888888', 3))
+                    for pc, ac in zip(pin_coords, attach_pts):
+                        dc.DrawLine(shared, int(pc), int(origin[0]), int(ac))
+
+                # D-shaped body: built once in a local frame (flat edge along
+                # local x, dome bulging toward local -y) then rotated into
+                # place — up/right/down/left for horiz+primary / vert+primary
+                # / horiz+not primary / vert+not primary respectively.
+                if horiz:
+                    angle = 0.0 if primary else math.pi
+                else:
+                    angle = math.pi / 2 if primary else 3 * math.pi / 2
                 dc.SetBrush(wx.Brush(wx.Colour(comp_def.color)))
                 dc.SetPen(wx.Pen('#333333', 2 if selected else 1))
                 gc = _make_gc(dc)
                 if gc is not None:
                     path = gc.CreatePath()
-                    path.MoveToPoint(cx_mid - body_half, flat_y)
-                    path.AddLineToPoint(cx_mid + body_half, flat_y)
-                    path.AddArc(cx_mid, flat_y, r_body, 0.0, math.pi, not dome_up)
+                    path.MoveToPoint(-body_half, 0)
+                    path.AddLineToPoint(body_half, 0)
+                    path.AddArc(0, 0, r_body, 0.0, math.pi, False)
                     path.CloseSubpath()
+                    gc.PushState()
+                    gc.Translate(*origin)
+                    gc.Rotate(angle)
                     gc.SetBrush(gc.CreateBrush(wx.Brush(wx.Colour(comp_def.color))))
                     gc.SetPen(gc.CreatePen(
                         wx.GraphicsPenInfo(wx.Colour('#333333')).Width(2 if selected else 1)))
                     gc.DrawPath(path)
+                    gc.PopState()
                 else:
                     # Fallback: dc.DrawArc for SVGFileDC and other non-GC DCs
-                    if dome_up:
-                        dc.DrawArc(int(cx_mid + body_half), int(flat_y),
-                                   int(cx_mid - body_half), int(flat_y),
-                                   int(cx_mid), int(flat_y))
+                    # (used for vector export; the interactive view always has
+                    # a GC available).
+                    ox, oy = origin
+                    if horiz:
+                        p1, p2 = (ox + body_half, oy), (ox - body_half, oy)
                     else:
-                        dc.DrawArc(int(cx_mid - body_half), int(flat_y),
-                                   int(cx_mid + body_half), int(flat_y),
-                                   int(cx_mid), int(flat_y))
+                        p1, p2 = (ox, oy + body_half), (ox, oy - body_half)
+                    a, b = (p1, p2) if primary else (p2, p1)
+                    dc.DrawArc(int(a[0]), int(a[1]), int(b[0]), int(b[1]), int(ox), int(oy))
 
-                # Ref label centered in the dome (use dc for screen coords)
+                # Ref label centered in the dome
                 dc.SetFont(wx.Font(6, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL,
                                    wx.FONTWEIGHT_NORMAL))
                 dc.SetTextForeground('#eeeeee')
                 tw, th = dc.GetTextExtent(ref)
-                lx = int(cx_mid) - tw // 2
-                if dome_up:
-                    ly = int(flat_y - r_body * 0.55) - th // 2
+                if horiz:
+                    lx = int(cx_mid) - tw // 2
+                    ly = (int(origin[1] - r_body * 0.55) if primary
+                          else int(origin[1] + r_body * 0.55)) - th // 2
                 else:
-                    ly = int(flat_y + r_body * 0.55) - th // 2
+                    ly = int(cy_mid) - th // 2
+                    lx = (int(origin[0] + r_body * 0.55) if primary
+                          else int(origin[0] - r_body * 0.55)) - tw // 2
                 dc.DrawText(ref, lx, ly)
 
                 # Pin name labels on the side away from the body
@@ -3562,21 +4480,36 @@ class BreadboardCanvas(wx.Panel):
                         continue
                     name = comp_def.pin_names.get(pin_num, str(pin_num))
                     ptw, pth = dc.GetTextExtent(name)
-                    if dome_up:
-                        dc.DrawText(name, pxy[0] - ptw // 2, pin_y + label_gap)
+                    if horiz:
+                        py_ = shared + label_gap if primary else shared - pth - label_gap
+                        dc.DrawText(name, pxy[0] - ptw // 2, py_)
                     else:
-                        dc.DrawText(name, pxy[0] - ptw // 2, pin_y - pth - label_gap)
+                        px_ = shared - ptw - label_gap if primary else shared + label_gap
+                        dc.DrawText(name, px_, pxy[1] - pth // 2)
                 return
             else:
-                # POT: Bourns-style trimpot — flat blue rectangle + golden side screw
-                body_rect = wx.Rect(x_min - 3, y_min - 6, x_max - x_min + 6, 12)
+                # POT: Bourns-style trimpot — flat blue rectangle + golden side screw.
+                # `placed.flipped` (0-3) cycles the screw right→bottom→left→top;
+                # the body draws as a vertical rectangle when the pins actually
+                # spread vertically in pixels (measured directly — column maps
+                # to a different screen axis on some board layouts, e.g.
+                # sunny-11's portrait blocks, so this can't be read off `flipped`
+                # the way TO-92's rotation is; see PinOffset.resolve's docstring).
+                turns = placed.flipped % 4
+                primary = turns < 2
+                horiz = (x_max - x_min) >= (y_max - y_min)
+                if horiz:
+                    body_rect = wx.Rect(x_min - 3, y_min - 6, x_max - x_min + 6, 12)
+                    screw_cx = body_rect.GetRight() - 6 if primary else body_rect.GetLeft() + 6
+                    screw_cy = (y_min + y_max) // 2
+                else:
+                    body_rect = wx.Rect(x_min - 6, y_min - 3, 12, y_max - y_min + 6)
+                    screw_cy = body_rect.GetBottom() - 6 if primary else body_rect.GetTop() + 6
+                    screw_cx = (x_min + x_max) // 2
                 dc.SetBrush(wx.Brush(body_color))
                 dc.SetPen(wx.Pen(border_color, 2 if selected else 1))
                 dc.DrawRectangle(body_rect)
 
-                # Golden trim-screw: right end normally, left end when flipped
-                screw_cx = body_rect.GetLeft() + 6 if placed.flipped else body_rect.GetRight() - 6
-                screw_cy = y_min
                 screw_r  = 5
                 dc.SetBrush(wx.Brush('#d4a520'))
                 dc.SetPen(wx.Pen('#886600', 1))
@@ -3586,7 +4519,7 @@ class BreadboardCanvas(wx.Panel):
                 dc.DrawLine(screw_cx - 3, screw_cy, screw_cx + 3, screw_cy)
                 dc.DrawLine(screw_cx, screw_cy - 3, screw_cx, screw_cy + 3)
 
-                # Pin labels (1, W, 3) below the body
+                # Pin labels (1, W, 3) on the side away from the body
                 dc.SetFont(wx.Font(5, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL,
                                    wx.FONTWEIGHT_NORMAL))
                 dc.SetTextForeground('#222222')
@@ -3597,7 +4530,10 @@ class BreadboardCanvas(wx.Panel):
                     if xy is None:
                         continue
                     tw, th = dc.GetTextExtent(pin_name)
-                    dc.DrawText(pin_name, xy[0] - tw // 2, body_rect.GetBottom() + 1)
+                    if horiz:
+                        dc.DrawText(pin_name, xy[0] - tw // 2, body_rect.GetBottom() + 1)
+                    else:
+                        dc.DrawText(pin_name, body_rect.GetRight() + 2, xy[1] - th // 2)
 
         # Reference label (skipped for DIP ICs and capacitors — they draw labels inside the body)
         if not comp_def.is_dip and placed.type_id != 'C':
@@ -4798,7 +5734,14 @@ class BreadboardCanvas(wx.Panel):
                 sp.CloseSubpath()
                 stripe = wx.Colour('#111111')
                 gc.SetBrush(gc.CreateBrush(wx.Brush(stripe)))
-                gc.SetPen(gc.CreatePen(wx.GraphicsPenInfo(stripe).Width(0)))
+                # No stroke needed — it's a plain fill. A same-colour Width(0)
+                # "hairline" pen looks identical on Linux/Cairo but is a known
+                # source of erratic, angle- and scale-dependent stroke blowups
+                # under GDI+ on Windows once a rotation is combined with a
+                # non-default zoom (the hairline width is computed by
+                # inverting the current transform, which the affected GDI+
+                # versions get wrong for non-axis-aligned rotations).
+                gc.SetPen(gc.CreatePen(wx.GraphicsPenInfo(wx.TransparentColour)))
                 gc.DrawPath(sp)
                 # Redraw circle border on top
                 gc.SetBrush(gc.CreateBrush(_transparent_brush()))
@@ -4900,7 +5843,9 @@ class BreadboardCanvas(wx.Panel):
                 elif placed.type_id == 'D':
                     _stripe = wx.Colour('#cccccc')
                     gc.SetBrush(gc.CreateBrush(wx.Brush(_stripe)))
-                    gc.SetPen(gc.CreatePen(wx.GraphicsPenInfo(_stripe).Width(0)))
+                    # Transparent pen, not a same-colour Width(0) hairline —
+                    # see the C_POL cathode-arc comment above for why.
+                    gc.SetPen(gc.CreatePen(wx.GraphicsPenInfo(wx.TransparentColour)))
                     gc.DrawRectangle(-body_half + 4, -body_h / 2, 4, body_h)
                     # Redraw body border on top so the stripe doesn't obscure it
                     gc.SetBrush(gc.CreateBrush(_transparent_brush()))
@@ -4911,7 +5856,7 @@ class BreadboardCanvas(wx.Panel):
                     # cathode band, but rectangular so there is no rounded blob.
                     _stripe = wx.Colour('#cccccc')
                     gc.SetBrush(gc.CreateBrush(wx.Brush(_stripe)))
-                    gc.SetPen(gc.CreatePen(wx.GraphicsPenInfo(_stripe).Width(0)))
+                    gc.SetPen(gc.CreatePen(wx.GraphicsPenInfo(wx.TransparentColour)))
                     gc.DrawRectangle(-body_half + 4, -body_h / 2, 4, body_h)
                     gc.SetBrush(gc.CreateBrush(_transparent_brush()))
                     gc.SetPen(gc.CreatePen(wx.GraphicsPenInfo(border_color).Width(pen_w)))
@@ -5037,7 +5982,7 @@ class BreadboardCanvas(wx.Panel):
         # Ref label below the body (perpendicular to component axis, outward)
         dc.SetFont(wx.Font(6, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL,
                            wx.FONTWEIGHT_NORMAL))
-        dc.SetTextForeground('#222222')
+        dc.SetTextForeground('#ffffff')
         tw, th = dc.GetTextExtent(ref)
         lx = int(mx + uy * (body_h / 2 + 3)) - tw // 2
         ly = int(my - ux * (body_h / 2 + 3)) - th // 2
@@ -5046,8 +5991,15 @@ class BreadboardCanvas(wx.Panel):
     def _draw_slider_switch(self, dc: wx.DC, comp_def: ComponentDef,
                              placed: PlacedComponent, ref: str,
                              x_min: int, x_max: int, y_min: int, y_max: int,
-                             in_top: bool, selected: bool) -> None:
-        """Draw an SPDT or SP3T slider switch."""
+                             primary: bool, horiz: bool, selected: bool) -> None:
+        """Draw an SPDT or SP3T slider switch.
+
+        `horiz` (measured from the real resolved pin spread, not inferred from
+        `placed.flipped` — see PinOffset.resolve's quad_rotate docstring) picks
+        a horizontal or vertical housing to match wherever the pins actually
+        landed; `primary` (flipped 0/1 vs 2/3) picks which of the two sides
+        the housing sits on — above/right for primary, below/left otherwise.
+        """
         lay = self.layout
         pen_w = 2 if selected else 1
         body_color = wx.Colour(comp_def.color)    # brown
@@ -5060,29 +6012,39 @@ class BreadboardCanvas(wx.Panel):
         SLIDER_W = max(10, PITCH - 4)
         SLIDER_H = 6
 
-        body_left  = x_min - 4
-        body_right = x_max + 4
-        body_w = body_right - body_left
-        cx = (body_left + body_right) // 2
+        dc.SetFont(wx.Font(5, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL,
+                           wx.FONTWEIGHT_NORMAL))
 
-        if in_top:
-            body_top    = y_min - BODY_H - 2
-            body_bottom = y_min - 2
+        if horiz:
+            body_left  = x_min - 4
+            body_right = x_max + 4
+            body_w = body_right - body_left
+            cx = (body_left + body_right) // 2
+
+            if primary:
+                body_top    = y_min - BODY_H - 2
+                body_bottom = y_min - 2
+                stub_y = body_bottom
+            else:
+                body_top    = y_max + 2
+                body_bottom = y_max + 2 + BODY_H
+                stub_y = y_max - 2
             # Pin stubs
             dc.SetBrush(wx.Brush('#888888'))
             dc.SetPen(wx.Pen('#555555', 1))
             for hole in placed.pin_holes.values():
                 xy = lay.hole_xy(hole)
                 if xy:
-                    dc.DrawRectangle(xy[0] - 1, body_bottom, 3, 4)
+                    dc.DrawRectangle(xy[0] - 1, stub_y, 3, 4)
             # Housing body
             dc.SetBrush(wx.Brush(body_color))
             dc.SetPen(wx.Pen(border_color, pen_w))
             dc.DrawRoundedRectangle(body_left, body_top, body_w, BODY_H, 3)
-            # Faceplate
+            # Faceplate (at the far side, away from the holes)
             face_left = body_left + FACE_INS
-            face_top  = body_top  + FACE_INS
             face_w    = body_w - 2 * FACE_INS
+            face_top  = (body_top + FACE_INS if primary
+                         else body_bottom - FACE_INS - FACE_H)
             dc.SetBrush(wx.Brush(face_color))
             dc.SetPen(wx.Pen('#777777', 1))
             dc.DrawRoundedRectangle(face_left, face_top, face_w, FACE_H, 2)
@@ -5092,65 +6054,78 @@ class BreadboardCanvas(wx.Panel):
             dc.SetBrush(wx.Brush(slider_color))
             dc.SetPen(wx.Pen('#111111', 1))
             dc.DrawRoundedRectangle(sx, sy, SLIDER_W, SLIDER_H, 2)
-            # Pin labels at holes
-            dc.SetFont(wx.Font(5, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL,
-                               wx.FONTWEIGHT_NORMAL))
+            # Pin labels at holes, on the side away from the housing
             dc.SetTextForeground('#444444')
             for pin_num in sorted(placed.pin_holes):
                 xy = lay.hole_xy(placed.pin_holes[pin_num])
                 if xy:
                     name = comp_def.pin_names.get(pin_num, str(pin_num))
                     tw, th = dc.GetTextExtent(name)
-                    dc.DrawText(name, xy[0] - tw // 2, body_bottom + 5)
-            # Ref label below pin labels
+                    py = body_bottom + 5 if primary else y_max - th - 4
+                    dc.DrawText(name, xy[0] - tw // 2, py)
+            # Ref label past the pin labels
             dc.SetFont(wx.Font(6, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL,
                                wx.FONTWEIGHT_NORMAL))
             dc.SetTextForeground('#222222')
             tw, th = dc.GetTextExtent(ref)
-            dc.DrawText(ref, cx - tw // 2, body_bottom + 14)
+            ry = body_bottom + 14 if primary else y_max - th - 14
+            dc.DrawText(ref, cx - tw // 2, ry)
         else:
-            body_top    = y_max + 2
-            body_bottom = y_max + 2 + BODY_H
+            pin_x = (x_min + x_max) // 2
+            body_top    = y_min - 4
+            body_bottom = y_max + 4
+            body_h = body_bottom - body_top
+            cy = (body_top + body_bottom) // 2
+
+            if primary:
+                body_left  = pin_x + 2
+                body_right = pin_x + 2 + BODY_H
+                stub_x = pin_x - 2
+            else:
+                body_right = pin_x - 2
+                body_left  = pin_x - 2 - BODY_H
+                stub_x = pin_x - 2
             # Pin stubs
             dc.SetBrush(wx.Brush('#888888'))
             dc.SetPen(wx.Pen('#555555', 1))
             for hole in placed.pin_holes.values():
                 xy = lay.hole_xy(hole)
                 if xy:
-                    dc.DrawRectangle(xy[0] - 1, y_max - 2, 3, 4)
+                    dc.DrawRectangle(stub_x, xy[1] - 1, 4, 3)
             # Housing body
             dc.SetBrush(wx.Brush(body_color))
             dc.SetPen(wx.Pen(border_color, pen_w))
-            dc.DrawRoundedRectangle(body_left, body_top, body_w, BODY_H, 3)
-            # Faceplate (at the far side, away from holes)
-            face_left = body_left + FACE_INS
-            face_top  = body_bottom - FACE_INS - FACE_H
-            face_w    = body_w - 2 * FACE_INS
+            dc.DrawRoundedRectangle(body_left, body_top, BODY_H, body_h, 3)
+            # Faceplate (at the far side, away from the holes)
+            face_top = body_top + FACE_INS
+            face_h   = body_h - 2 * FACE_INS
+            face_left = (body_right - FACE_INS - FACE_H if primary
+                         else body_left + FACE_INS)
             dc.SetBrush(wx.Brush(face_color))
             dc.SetPen(wx.Pen('#777777', 1))
-            dc.DrawRoundedRectangle(face_left, face_top, face_w, FACE_H, 2)
-            # Slider knob
-            sx = cx - SLIDER_W // 2
-            sy = face_top + (FACE_H - SLIDER_H) // 2
+            dc.DrawRoundedRectangle(face_left, face_top, FACE_H, face_h, 2)
+            # Slider knob (centred on faceplate)
+            sy = cy - SLIDER_W // 2
+            sx = face_left + (FACE_H - SLIDER_H) // 2
             dc.SetBrush(wx.Brush(slider_color))
             dc.SetPen(wx.Pen('#111111', 1))
-            dc.DrawRoundedRectangle(sx, sy, SLIDER_W, SLIDER_H, 2)
-            # Pin labels
-            dc.SetFont(wx.Font(5, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL,
-                               wx.FONTWEIGHT_NORMAL))
+            dc.DrawRoundedRectangle(sx, sy, SLIDER_H, SLIDER_W, 2)
+            # Pin labels at holes, on the side away from the housing
             dc.SetTextForeground('#444444')
             for pin_num in sorted(placed.pin_holes):
                 xy = lay.hole_xy(placed.pin_holes[pin_num])
                 if xy:
                     name = comp_def.pin_names.get(pin_num, str(pin_num))
                     tw, th = dc.GetTextExtent(name)
-                    dc.DrawText(name, xy[0] - tw // 2, y_max - th - 4)
-            # Ref label above pin labels
+                    px = pin_x - 2 - tw - 5 if primary else pin_x + 2 + 5
+                    dc.DrawText(name, px, xy[1] - th // 2)
+            # Ref label past the pin labels
             dc.SetFont(wx.Font(6, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL,
                                wx.FONTWEIGHT_NORMAL))
             dc.SetTextForeground('#222222')
             tw, th = dc.GetTextExtent(ref)
-            dc.DrawText(ref, cx - tw // 2, y_max - th - 14)
+            rx = pin_x - 2 - tw - 14 if primary else pin_x + 2 + 14
+            dc.DrawText(ref, rx, cy - th // 2)
 
     def _draw_probe_flag(self, dc: wx.DC,
                           hx: int, hy: int,
@@ -5345,6 +6320,284 @@ class BreadboardCanvas(wx.Panel):
             nlw = dc.GetTextExtent(net_label).Width
             dc.DrawText(net_label, cx - nlw // 2, net_y)
 
+    def _ghost_pin_xy(self) -> Dict[int, Tuple[float, float]]:
+        """Candidate canvas position for each pin of the component currently
+        being placed, given how far the placement gesture has progressed."""
+        ghost = self._ghost
+        if ghost is None:
+            return {}
+        lay = self.layout
+        comp_def = ghost.comp_def
+
+        if comp_def.is_module:
+            mx, my = self._ghost_pos
+            pins = self._compute_module_pins(ghost.ref, comp_def, int(mx), int(my),
+                                             flipped=ghost.flipped)
+            return {pin: xy for (_ref, pin), xy in pins.items()}
+
+        if comp_def.pin_count == 2 and not comp_def.is_dip:
+            # First-click pin number is fixed per type (see _commit_place).
+            first_pin = 2 if comp_def.type_id in ('LED', 'D', 'D_Zener') else 1
+            other_pin = 1 if first_pin == 2 else 2
+            # Fall back to the raw cursor position for whichever pin has no
+            # snapped hole yet (off-canvas, or hovering empty board margin) —
+            # matches _draw_ghost's floating-body behaviour, so the ratsnest
+            # for that pin keeps following the mouse instead of disappearing.
+            # Off-canvas floating uses the raw cursor as a stand-in position;
+            # a hole-less gap *within* the board (still on-canvas, e.g.
+            # sunny-11's inter-block gutter) gets no ratsnest line at all,
+            # matching _draw_ghost's floating-placeholder rule.
+            result: Dict[int, Tuple[float, float]] = {}
+            if self._place_pin1 is not None:
+                xy = lay.hole_xy(self._place_pin1)
+                if xy:
+                    result[first_pin] = xy
+                xy2 = lay.hole_xy(ghost.anchor) if ghost.anchor is not None else None
+                if xy2 is not None:
+                    result[other_pin] = xy2
+                elif not self._pointer_over_canvas:
+                    result[other_pin] = self._ghost_pos
+            else:
+                xy = lay.hole_xy(ghost.anchor) if ghost.anchor is not None else None
+                if xy is not None:
+                    result[first_pin] = xy
+                elif not self._pointer_over_canvas:
+                    result[first_pin] = self._ghost_pos
+            return result
+
+        if ghost.anchor is None:
+            return {}
+        # Lenient resolution: a pin running off the edge of the board (e.g.
+        # placing a wide DIP near column 1) shouldn't blank the ratsnest for
+        # every other pin that's still on-board — show what we can.
+        pin_holes = self._resolve_pin_holes(comp_def, ghost.anchor, ghost.flipped, lenient=True)
+        result = {}
+        for pin, hole in pin_holes.items():
+            xy = lay.hole_xy(hole)
+            if xy:
+                result[pin] = xy
+        return result
+
+    def _nearest_reachable_xy(self, uf, anchor: Hole,
+                               from_xy: Tuple[float, float]) -> Optional[Tuple[int, int]]:
+        """Among every hole electrically connected to `anchor` (per the
+        board's UnionFind `uf` — static tie/rail strips plus placed wires),
+        return the canvas position of whichever is geometrically closest to
+        `from_xy`. Mirrors how the PCB editor's ratsnest snaps to the nearest
+        point on an already-existing track rather than the original pad."""
+        root = uf.find(anchor)
+        fx, fy = from_xy
+        best_xy: Optional[Tuple[int, int]] = None
+        best_d: Optional[float] = None
+        for hole in self.layout.all_holes():
+            if uf.find(hole) != root:
+                continue
+            xy = self.layout.hole_xy(hole)
+            if xy is None:
+                continue
+            d = (xy[0] - fx) ** 2 + (xy[1] - fy) ** 2
+            if best_d is None or d < best_d:
+                best_d, best_xy = d, xy
+        return best_xy
+
+    def _draw_ratsnest(self, dc: wx.DC) -> None:
+        """While placing a component, draw thin lines from each of its pins to
+        any already-placed pin sharing the same schematic net — a preview of
+        where this component could be connected, mirroring the PCB editor's
+        ratsnest. Nets that have no resolvable target yet (nothing placed on
+        that net, and no terminal assigned to it) are collected into
+        self._ratsnest_notice so _draw_ratsnest_notice can flag them."""
+        self._ratsnest_notice = ''
+        ghost = self._ghost
+        if ghost is None or self.netlist is None:
+            return
+        ref = ghost.ref
+        pin_xy = self._ghost_pin_xy()
+        if not pin_xy:
+            return
+        nets = self.netlist.nets_for_ref(ref)
+        if not nets:
+            return
+
+        uf = self.board.build_connectivity()
+
+        segments = []
+        unresolved_names: List[str] = []
+        seen_net_codes: Set[int] = set()
+        for pin_num, xy in pin_xy.items():
+            net = nets.get(pin_num)
+            if net is None:
+                continue
+            found = False
+            for npin in net.pins:
+                if npin.ref == ref:
+                    continue
+                hole = self.board.hole_for_pin(npin.ref, npin.pin)
+                if hole is None:
+                    continue
+                # That pin may already be wired onward (e.g. into a power
+                # rail) — end the line at whichever point on its electrical
+                # group is geometrically closest, like the PCB editor's
+                # ratsnest snapping to the nearest existing track.
+                target_xy = self._nearest_reachable_xy(uf, hole, xy) \
+                    or self.layout.hole_xy(hole)
+                if target_xy is None:
+                    continue
+                segments.append((xy, target_xy))
+                found = True
+            # Power/ground nets are connected via a binding-post terminal
+            # (assigned in the sidebar) rather than a placed component pin.
+            for term_name, term_net in self.board.terminal_nets.items():
+                if term_net != net.name:
+                    continue
+                term_hole = Terminal(term_name)
+                target_xy = self._nearest_reachable_xy(uf, term_hole, xy) \
+                    or self.layout.hole_xy(term_hole)
+                if target_xy is not None:
+                    segments.append((xy, target_xy))
+                    found = True
+            if not found and net.code not in seen_net_codes:
+                seen_net_codes.add(net.code)
+                unresolved_names.append('GND' if net.name == '0' else net.name)
+
+        if unresolved_names:
+            names = ', '.join(unresolved_names[:3])
+            if len(unresolved_names) > 3:
+                names += f' +{len(unresolved_names) - 3} more'
+            self._ratsnest_notice = f'Ratsnest: {names} not yet placed on board'
+
+        self._draw_ratsnest_segments(dc, segments)
+
+    def _draw_ratsnest_segments(self, dc: wx.DC, segments) -> None:
+        """Dashed-line rendering shared by the placement ratsnest and the
+        wire-mode ratsnest."""
+        if not segments:
+            return
+
+        # wx.PENSTYLE_DOT is silently dropped by the Cairo backend on a scaled
+        # DC (GTK/Linux) — draw the dashed line via GraphicsContext instead.
+        gc = wx.GraphicsContext.Create(dc)
+        if gc is None:
+            return
+        # Was amber (255,190,0) — too close in hue to the board's cream/yellow
+        # surface (#e8e0c8) to read clearly. Electric blue-violet sits on the
+        # opposite side of the color wheel from that yellow, so it stays
+        # legible against the board and doesn't collide with any WIRE_COLORS
+        # entry (avoids being mistaken for an actual placed wire).
+        pen = gc.CreatePen(wx.GraphicsPenInfo(wx.Colour(60, 70, 255, 235))
+                           .Width(1.6).Style(wx.PENSTYLE_SHORT_DASH))
+        gc.SetPen(pen)
+        for (x1, y1), (x2, y2) in segments:
+            path = gc.CreatePath()
+            path.MoveToPoint(x1, y1)
+            path.AddLineToPoint(x2, y2)
+            gc.StrokePath(path)
+
+    def _draw_wire_ratsnest(self, dc: wx.DC) -> None:
+        """While drawing a wire (first endpoint already clicked), preview a
+        dashed line to every schematic-net pin not yet reachable from that
+        endpoint — the same net-completion hint _draw_ratsnest gives during
+        component placement, anchored on the wire's first click instead."""
+        if self.netlist is None or self._wire_start is None:
+            return
+        start = self._wire_start
+        start_xy = self.layout.hole_xy(start)
+        if start_xy is None:
+            return
+
+        uf = self.board.build_connectivity()
+        root = uf.find(start)
+
+        # Which schematic net(s) is this hole's electrical group already on?
+        net_names: Set[str] = set()
+        for term_name, term_net in self.board.terminal_nets.items():
+            if uf.find(Terminal(term_name)) == root:
+                net_names.add(term_net)
+        for ref, placed in self.board.placements.items():
+            if ALL_DEFS.get(placed.type_id) is None:
+                continue
+            nets = self.netlist.nets_for_ref(ref)
+            for pin_num, hole in placed.pin_holes.items():
+                if uf.find(hole) != root:
+                    continue
+                net = nets.get(pin_num)
+                if net:
+                    net_names.add(net.name)
+        if not net_names:
+            return
+
+        segments = []
+        for net_name in net_names:
+            net = self.netlist.net_by_name(net_name)
+            if net is None:
+                continue
+            for npin in net.pins:
+                hole = self.board.hole_for_pin(npin.ref, npin.pin)
+                if hole is None or uf.find(hole) == root:
+                    continue   # unplaced, or already connected to the wire start
+                target_xy = self._nearest_reachable_xy(uf, hole, start_xy) \
+                    or self.layout.hole_xy(hole)
+                if target_xy is not None:
+                    segments.append((start_xy, target_xy))
+            for term_name, term_net in self.board.terminal_nets.items():
+                if term_net != net_name:
+                    continue
+                term_hole = Terminal(term_name)
+                if uf.find(term_hole) == root:
+                    continue
+                target_xy = self._nearest_reachable_xy(uf, term_hole, start_xy) \
+                    or self.layout.hole_xy(term_hole)
+                if target_xy is not None:
+                    segments.append((start_xy, target_xy))
+
+        self._draw_ratsnest_segments(dc, segments)
+
+    def _draw_ratsnest_notice(self, dc: wx.DC) -> None:
+        """Small banner (screen-space) flagging ratsnest nets with no
+        resolvable target on the board yet. Called after the zoom/pan
+        transform is reset."""
+        msg = self._ratsnest_notice
+        # Only meaningful during an active placement — self._ratsnest_notice
+        # is set by _draw_ratsnest, which does not run once the ghost is
+        # cleared, so without this guard a stale message would linger on
+        # screen indefinitely after placement finishes.
+        if self._ghost is None or not msg or msg == self._ratsnest_notice_dismissed:
+            self._ratsnest_close_rect = None
+            return
+        font = wx.Font(10, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
+        dc.SetFont(font)
+        tw, th = dc.GetTextExtent(msg)
+
+        PAD_X, PAD_Y = 10, 6
+        CLOSE_GAP, CLOSE_W = 6, 14   # space + width reserved for the 'x' button
+        box_w = tw + PAD_X * 2 + CLOSE_GAP + CLOSE_W
+        box_h = th + PAD_Y * 2
+        cw, _ch = dc.GetSize()
+        bx = (cw - box_w) // 2
+        by = 10
+
+        dc.SetBrush(wx.Brush(wx.Colour(0x80, 0x40, 0x00, 220)))
+        dc.SetPen(wx.Pen(wx.Colour(0xff, 0xb0, 0x30), 1))
+        dc.DrawRoundedRectangle(bx, by, box_w, box_h, 5)
+        dc.SetTextForeground(wx.Colour(0xff, 0xff, 0xff))
+        dc.DrawText(msg, bx + PAD_X, by + PAD_Y)
+
+        # Close ('x') button, right-aligned inside the box
+        cx0 = bx + box_w - PAD_X - CLOSE_W
+        cy0 = by
+        close_rect = wx.Rect(cx0, cy0, CLOSE_W + PAD_X, box_h)
+        self._ratsnest_close_rect = close_rect
+        mx, my = cx0 + CLOSE_W // 2, by + box_h // 2
+        r = 4
+        dc.SetPen(wx.Pen(wx.Colour(0xff, 0xe0, 0xb0), 2))
+        dc.DrawLine(mx - r, my - r, mx + r, my + r)
+        dc.DrawLine(mx - r, my + r, mx + r, my - r)
+
+    def _dismiss_ratsnest_notice(self) -> None:
+        self._ratsnest_notice_dismissed = self._ratsnest_notice
+        self._ratsnest_close_rect = None
+        self.Refresh()
+
     def _draw_ghost(self, dc: wx.DC) -> None:
         """Draw a semi-transparent component preview at the drag position."""
         ghost = self._ghost
@@ -5385,12 +6638,19 @@ class BreadboardCanvas(wx.Panel):
                     dc.DrawCircle(p1_xy[0], p1_xy[1], HOLE_R + 5)
                 return
             else:
-                # First click not yet locked: preview at hovered hole
-                if ghost.anchor is None:
-                    return
-                p1_xy = lay.hole_xy(ghost.anchor)
+                # First click not yet locked: preview at hovered hole, or
+                # floating at the raw cursor when the pointer has left the
+                # canvas entirely, so the ghost keeps tracking the mouse
+                # instead of freezing or vanishing. But if the pointer is
+                # still on-canvas with nothing in snap range — hovering a
+                # hole-less gap *within* the board, e.g. sunny-11's
+                # inter-block gutter — draw nothing rather than float a
+                # placeholder that would misleadingly suggest a drop there.
+                p1_xy = lay.hole_xy(ghost.anchor) if ghost.anchor is not None else None
                 if p1_xy is None:
-                    return
+                    if self._pointer_over_canvas:
+                        return
+                    p1_xy = self._ghost_pos
                 px_off = PITCH * 4 * (-1 if ghost.flipped else 1)
                 p2_xy = (p1_xy[0] + px_off, p1_xy[1])
                 # Swap so the hovered hole shows as anode (no stripe) for diodes
@@ -5398,17 +6658,45 @@ class BreadboardCanvas(wx.Panel):
                     self._draw_ghost_2pin(dc, comp_def, p2_xy, p1_xy)
                 else:
                     self._draw_ghost_2pin(dc, comp_def, p1_xy, p2_xy)
-                # Highlight the hover hole as the first-click target
-                dc.SetBrush(wx.Brush(wx.Colour(255, 200, 0, 100)))
-                dc.SetPen(wx.Pen('#ffcc0088', 2))
-                dc.DrawCircle(p1_xy[0], p1_xy[1], HOLE_R + 5)
+                if ghost.anchor is not None:
+                    # Highlight the hover hole as the first-click target
+                    dc.SetBrush(wx.Brush(wx.Colour(255, 200, 0, 100)))
+                    dc.SetPen(wx.Pen('#ffcc0088', 2))
+                    dc.DrawCircle(p1_xy[0], p1_xy[1], HOLE_R + 5)
                 return
 
         if ghost.anchor is None:
+            # Nothing in snap range and no hole to derive an exact pin layout
+            # from. Only float a placeholder once the pointer has actually
+            # left the canvas — if it's still on-canvas hovering a hole-less
+            # gap within the board itself (e.g. sunny-11's inter-block
+            # gutter), draw nothing instead of a placeholder that would
+            # misleadingly suggest a component could be dropped there.
+            if self._pointer_over_canvas:
+                return
+            fx, fy = self._ghost_pos
+            half_w = comp_def.footprint_cols() * PITCH / 2.0
+            half_h = PITCH if comp_def.is_dip else 8.0
+            base_color = wx.Colour(comp_def.color)
+            r0, g0, b0 = base_color.Red(), base_color.Green(), base_color.Blue()
+            ghost_color = wx.Colour((r0 * 2 + 255) // 3, (g0 * 2 + 255) // 3, (b0 * 2 + 255) // 3)
+            gc = _make_gc(dc)
+            if gc is not None:
+                gc.SetBrush(gc.CreateBrush(wx.Brush(ghost_color)))
+                gc.SetPen(gc.CreatePen(wx.GraphicsPenInfo(
+                    wx.Colour(max(0, r0 - 40), max(0, g0 - 40), max(0, b0 - 40))).Width(1)))
+                gc.DrawRoundedRectangle(fx - half_w, fy - half_h, 2 * half_w, 2 * half_h, 3.0)
             return
         try:
-            pin_holes = comp_def.place(ghost.anchor, flipped=ghost.flipped)
+            pin_holes = self._resolve_pin_holes(comp_def, ghost.anchor, ghost.flipped)
         except (AssertionError, IndexError, KeyError):
+            return
+        if not self._pin_holes_valid(pin_holes):
+            # A pin would land off the edge of the board (e.g. dragging a
+            # wide DIP toward the end of sunny-11's narrow 28-column blocks).
+            # Drawing only the pins that still fit would render a shrunken
+            # body that looks like a smaller IC (DIP16 reading as DIP6/4/2)
+            # instead of signalling that the component won't fit here.
             return
 
         holes_xy = [lay.hole_xy(h) for h in pin_holes.values()]
@@ -5418,7 +6706,6 @@ class BreadboardCanvas(wx.Panel):
         xs = [xy[0] for xy in holes_xy]
         ys = [xy[1] for xy in holes_xy]
 
-        _TO92_TYPES    = frozenset({'NPN', 'PNP', 'JFET_N', 'JFET_P', 'BS170', 'NMOS', 'PMOS'})
         _SLIDER_TYPES  = frozenset({'SPDT', 'SP3T'})
         base_color = wx.Colour(comp_def.color)
         r0, g0, b0 = base_color.Red(), base_color.Green(), base_color.Blue()
@@ -5428,82 +6715,121 @@ class BreadboardCanvas(wx.Panel):
             wx.Colour(max(0, r0 - 40), max(0, g0 - 40), max(0, b0 - 40))).Width(1)
 
         if comp_def.type_id in _SLIDER_TYPES:
-            sample_hole = next(iter(pin_holes.values()))
-            in_top = isinstance(sample_hole, TieHole) and sample_hole.row in TOP_ROWS
+            # See _draw_slider_switch: axis/side come from `flipped` + the
+            # real resolved pixel spread, not from the row bank.
+            turns_g = ghost.flipped % 4
+            primary_g = turns_g < 2
             x_min_g, x_max_g = min(xs), max(xs)
             y_min_g, y_max_g = min(ys), max(ys)
+            horiz_g = (x_max_g - x_min_g) >= (y_max_g - y_min_g)
             BODY_H_G  = 18
             FACE_H_G  = 10
             FACE_INS_G = 2
-            body_left_g  = float(x_min_g - 4)
-            body_right_g = float(x_max_g + 4)
-            body_w_g = body_right_g - body_left_g
             face_col = wx.Colour(0xcc, 0xcc, 0xcc)
             gc = _make_gc(dc)
             if gc is None:
                 return
             dot_pen = gc.CreatePen(_ghost_pen)
-            if in_top:
-                body_top_g = float(y_min_g - BODY_H_G - 2)
+            if horiz_g:
+                body_left_g  = float(x_min_g - 4)
+                body_right_g = float(x_max_g + 4)
+                body_w_g = body_right_g - body_left_g
+                if primary_g:
+                    body_top_g = float(y_min_g - BODY_H_G - 2)
+                    face_top_g = body_top_g + FACE_INS_G
+                else:
+                    body_top_g = float(y_max_g + 2)
+                    face_top_g = body_top_g + BODY_H_G - FACE_INS_G - FACE_H_G
                 gc.SetBrush(gc.CreateBrush(wx.Brush(ghost_color)))
                 gc.SetPen(dot_pen)
                 gc.DrawRoundedRectangle(body_left_g, body_top_g, body_w_g, float(BODY_H_G), 3.0)
-                gc.SetBrush(gc.CreateBrush(wx.Brush(face_col)))
-                gc.DrawRoundedRectangle(
-                    body_left_g + FACE_INS_G, body_top_g + FACE_INS_G,
-                    body_w_g - 2 * FACE_INS_G, float(FACE_H_G), 2.0)
-            else:
-                body_top_g = float(y_max_g + 2)
-                gc.SetBrush(gc.CreateBrush(wx.Brush(ghost_color)))
-                gc.SetPen(dot_pen)
-                gc.DrawRoundedRectangle(body_left_g, body_top_g, body_w_g, float(BODY_H_G), 3.0)
-                face_top_g = body_top_g + BODY_H_G - FACE_INS_G - FACE_H_G
                 gc.SetBrush(gc.CreateBrush(wx.Brush(face_col)))
                 gc.DrawRoundedRectangle(
                     body_left_g + FACE_INS_G, face_top_g,
                     body_w_g - 2 * FACE_INS_G, float(FACE_H_G), 2.0)
+            else:
+                pin_x_g = (x_min_g + x_max_g) / 2.0
+                body_top_g    = float(y_min_g - 4)
+                body_bottom_g = float(y_max_g + 4)
+                body_h_g = body_bottom_g - body_top_g
+                if primary_g:
+                    body_left_g = pin_x_g + 2
+                    face_left_g = body_left_g + BODY_H_G - FACE_INS_G - FACE_H_G
+                else:
+                    body_left_g = pin_x_g - 2 - BODY_H_G
+                    face_left_g = body_left_g + FACE_INS_G
+                gc.SetBrush(gc.CreateBrush(wx.Brush(ghost_color)))
+                gc.SetPen(dot_pen)
+                gc.DrawRoundedRectangle(body_left_g, body_top_g, float(BODY_H_G), body_h_g, 3.0)
+                gc.SetBrush(gc.CreateBrush(wx.Brush(face_col)))
+                gc.DrawRoundedRectangle(
+                    face_left_g, body_top_g + FACE_INS_G,
+                    float(FACE_H_G), body_h_g - 2 * FACE_INS_G, 2.0)
 
-        elif comp_def.type_id in _TO92_TYPES:
-            # Ammo-pack ghost for TO-92
-            sample_hole = next(iter(pin_holes.values()))
-            in_top = isinstance(sample_hole, TieHole) and sample_hole.row in TOP_ROWS
+        elif _is_to92_type(comp_def.type_id):
+            # Ammo-pack ghost for TO-92 — mirrors _draw_placed_component's TO-92
+            # branch (see there for the rotation rationale): axis is measured
+            # from the real resolved pixel spread, not inferred from `flipped`,
+            # since column maps to a different screen axis on some board
+            # layouts (e.g. sunny-11's portrait blocks).
+            turns_g = ghost.flipped % 4
+            primary_g = turns_g < 2
             x_min_g, x_max_g = min(xs), max(xs)
-            cx_mid_g    = float((x_min_g + x_max_g) // 2)
+            y_min_g, y_max_g = min(ys), max(ys)
+            cx_mid_g = (x_min_g + x_max_g) / 2.0
+            cy_mid_g = (y_min_g + y_max_g) / 2.0
             body_half_g = 12.0
             r_body_g    = body_half_g
-            pin_y_g     = min(ys) if in_top else max(ys)
-            flat_y_g    = float(pin_y_g)
-
             inset_g     = 3.0
             step_g      = (2 * body_half_g - 2 * inset_g) / 2
-            attach_xs_g = [cx_mid_g - body_half_g + inset_g + i * step_g for i in range(3)]
-            pin_xs_g    = sorted(xy[0] for xy in holes_xy)
-            dc.SetPen(wx.Pen(wx.Colour(0x88, 0x88, 0x88), 3))
-            for px_g, ax_g in zip(pin_xs_g, attach_xs_g):
-                dc.DrawLine(int(px_g), pin_y_g, int(ax_g), int(flat_y_g))
+            attach_g    = [-body_half_g + inset_g + i * step_g for i in range(3)]
 
-            dome_up_g = not bool(ghost.flipped)
+            horiz_g = (x_max_g - x_min_g) >= (y_max_g - y_min_g)
+            if horiz_g:
+                origin_g = (cx_mid_g, float(y_min_g) if primary_g else float(y_max_g))
+                shared_g = y_min_g if primary_g else y_max_g
+                pin_coords_g = sorted(xy[0] for xy in holes_xy)
+                attach_pts_g = [cx_mid_g + a for a in attach_g]
+                dc.SetPen(wx.Pen(wx.Colour(0x88, 0x88, 0x88), 3))
+                for pc, ac in zip(pin_coords_g, attach_pts_g):
+                    dc.DrawLine(int(pc), shared_g, int(ac), int(origin_g[1]))
+            else:
+                origin_g = (float(x_max_g) if primary_g else float(x_min_g), cy_mid_g)
+                shared_g = x_max_g if primary_g else x_min_g
+                pin_coords_g = sorted(xy[1] for xy in holes_xy)
+                attach_pts_g = [cy_mid_g + a for a in attach_g]
+                dc.SetPen(wx.Pen(wx.Colour(0x88, 0x88, 0x88), 3))
+                for pc, ac in zip(pin_coords_g, attach_pts_g):
+                    dc.DrawLine(shared_g, int(pc), int(origin_g[0]), int(ac))
+
+            if horiz_g:
+                angle_g = 0.0 if primary_g else math.pi
+            else:
+                angle_g = math.pi / 2 if primary_g else 3 * math.pi / 2
             gc = _make_gc(dc)
             if gc is not None:
                 path = gc.CreatePath()
-                path.MoveToPoint(cx_mid_g - body_half_g, flat_y_g)
-                path.AddLineToPoint(cx_mid_g + body_half_g, flat_y_g)
-                path.AddArc(cx_mid_g, flat_y_g, r_body_g, 0.0, math.pi, not dome_up_g)
+                path.MoveToPoint(-body_half_g, 0)
+                path.AddLineToPoint(body_half_g, 0)
+                path.AddArc(0, 0, r_body_g, 0.0, math.pi, False)
                 path.CloseSubpath()
+                gc.PushState()
+                gc.Translate(*origin_g)
+                gc.Rotate(angle_g)
                 gc.SetBrush(gc.CreateBrush(wx.Brush(ghost_color)))
                 gc.SetPen(gc.CreatePen(_ghost_pen))
                 gc.DrawPath(path)
+                gc.PopState()
             else:
                 dc.SetBrush(wx.Brush(ghost_color))
                 dc.SetPen(wx.Pen(wx.Colour(max(0, r0 - 40), max(0, g0 - 40), max(0, b0 - 40)), 1))
-                if dome_up_g:
-                    dc.DrawArc(int(cx_mid_g + body_half_g), int(flat_y_g),
-                               int(cx_mid_g - body_half_g), int(flat_y_g),
-                               int(cx_mid_g), int(flat_y_g))
+                ox_g, oy_g = origin_g
+                if horiz_g:
+                    p1_g, p2_g = (ox_g + body_half_g, oy_g), (ox_g - body_half_g, oy_g)
                 else:
-                    dc.DrawArc(int(cx_mid_g - body_half_g), int(flat_y_g),
-                               int(cx_mid_g + body_half_g), int(flat_y_g),
-                               int(cx_mid_g), int(flat_y_g))
+                    p1_g, p2_g = (ox_g, oy_g + body_half_g), (ox_g, oy_g - body_half_g)
+                a_g, b_g = (p1_g, p2_g) if primary_g else (p2_g, p1_g)
+                dc.DrawArc(int(a_g[0]), int(a_g[1]), int(b_g[0]), int(b_g[1]), int(ox_g), int(oy_g))
 
             # Pin name labels on the side away from the body (ghost variant)
             dc.SetFont(wx.Font(5, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL,
@@ -5516,15 +6842,26 @@ class BreadboardCanvas(wx.Panel):
                     continue
                 name_g = comp_def.pin_names.get(pin_num_g, str(pin_num_g))
                 ptw_g, pth_g = dc.GetTextExtent(name_g)
-                if dome_up_g:
-                    dc.DrawText(name_g, pxy_g[0] - ptw_g // 2,
-                                int(pin_y_g) + label_gap_g)
+                if horiz_g:
+                    py_g = shared_g + label_gap_g if primary_g else shared_g - pth_g - label_gap_g
+                    dc.DrawText(name_g, pxy_g[0] - ptw_g // 2, py_g)
                 else:
-                    dc.DrawText(name_g, pxy_g[0] - ptw_g // 2,
-                                int(pin_y_g) - pth_g - label_gap_g)
+                    px_g = (shared_g - ptw_g - label_gap_g if primary_g
+                            else shared_g + label_gap_g)
+                    dc.DrawText(name_g, px_g, pxy_g[1] - pth_g // 2)
         else:
-            body_rect = wx.Rect(min(xs) - 4, min(ys) - 6,
-                                max(xs) - min(xs) + 8, max(ys) - min(ys) + 12)
+            # See the matching comment in _draw_placed_component: sunny-11's
+            # upper portrait blocks map row->x, column->y (transposed from
+            # every other layout), so a DIP ghost there is tall/vertical
+            # instead of wide/horizontal — detect which from the real
+            # resolved pixel spread rather than assuming column=x.
+            dip_horiz = (max(xs) - min(xs)) >= (max(ys) - min(ys))
+            if comp_def.is_dip and not dip_horiz:
+                body_rect = wx.Rect(min(xs) - 6, min(ys) - 4,
+                                    max(xs) - min(xs) + 12, max(ys) - min(ys) + 8)
+            else:
+                body_rect = wx.Rect(min(xs) - 4, min(ys) - 6,
+                                    max(xs) - min(xs) + 8, max(ys) - min(ys) + 12)
 
             if comp_def.is_dip and not comp_def.is_module:
                 # Ghost legs — use a plain light colour; dc alpha is unreliable on GTK
@@ -5535,10 +6872,18 @@ class BreadboardCanvas(wx.Panel):
                     if xy is None:
                         continue
                     hx, hy = xy
-                    if isinstance(hole, TieHole) and hole.row in TOP_ROWS:
-                        dc.DrawRectangle(hx - 1, body_rect.GetTop() - 6, 3, 7)
-                    elif isinstance(hole, TieHole) and hole.row in BOT_ROWS:
-                        dc.DrawRectangle(hx - 1, body_rect.GetBottom() - 1, 3, 7)
+                    is_top = isinstance(hole, TieHole) and hole.row in TOP_ROWS
+                    is_bot = isinstance(hole, TieHole) and hole.row in BOT_ROWS
+                    if dip_horiz:
+                        if is_top:
+                            dc.DrawRectangle(hx - 1, body_rect.GetTop() - 6, 3, 7)
+                        elif is_bot:
+                            dc.DrawRectangle(hx - 1, body_rect.GetBottom() - 1, 3, 7)
+                    else:
+                        if is_top:
+                            dc.DrawRectangle(body_rect.GetLeft() - 6, hy - 1, 7, 3)
+                        elif is_bot:
+                            dc.DrawRectangle(body_rect.GetRight() - 1, hy - 1, 7, 3)
 
             # Body via GraphicsContext
             gc = _make_gc(dc)
@@ -5556,13 +6901,17 @@ class BreadboardCanvas(wx.Panel):
                 dc.SetBrush(wx.Brush('#ffffff'))
                 dc.SetPen(wx.Pen('#333333', 1))
                 if comp_def.is_dip:
-                    if isinstance(p1_hole, TieHole) and p1_hole.row in TOP_ROWS:
-                        dot_y = body_rect.GetY() + 12
+                    p1_is_top = isinstance(p1_hole, TieHole) and p1_hole.row in TOP_ROWS
+                    if dip_horiz:
+                        dot_x = p1_xy[0]
+                        dot_y = body_rect.GetY() + 12 if p1_is_top else body_rect.GetBottom() - 12
                     else:
-                        dot_y = body_rect.GetBottom() - 12
+                        dot_y = p1_xy[1]
+                        dot_x = body_rect.GetX() + 12 if p1_is_top else body_rect.GetRight() - 12
                 else:
+                    dot_x = p1_xy[0]
                     dot_y = body_rect.GetTop() + 3
-                dc.DrawCircle(p1_xy[0], dot_y, 3)
+                dc.DrawCircle(dot_x, dot_y, 3)
 
     def _draw_ghost_2pin(self, dc: wx.DC, comp_def: ComponentDef,
                          p1_xy: Tuple[int, int], p2_xy: Tuple[int, int]) -> None:
@@ -5609,7 +6958,7 @@ class BreadboardCanvas(wx.Panel):
             sp.CloseSubpath()
             k_col = wx.Colour(0x11, 0x11, 0x11)
             gc.SetBrush(gc.CreateBrush(wx.Brush(k_col)))
-            gc.SetPen(gc.CreatePen(wx.GraphicsPenInfo(k_col).Width(0)))
+            gc.SetPen(gc.CreatePen(wx.GraphicsPenInfo(wx.TransparentColour)))
             gc.DrawPath(sp)
             gc.SetBrush(gc.CreateBrush(_transparent_brush()))
             gc.SetPen(gc.CreatePen(border_pen))
@@ -5640,7 +6989,7 @@ class BreadboardCanvas(wx.Panel):
             sp.CloseSubpath()
             stripe = wx.Colour(0x11, 0x11, 0x11)
             gc.SetBrush(gc.CreateBrush(wx.Brush(stripe)))
-            gc.SetPen(gc.CreatePen(wx.GraphicsPenInfo(stripe).Width(0)))
+            gc.SetPen(gc.CreatePen(wx.GraphicsPenInfo(wx.TransparentColour)))
             gc.DrawPath(sp)
             gc.SetBrush(gc.CreateBrush(_transparent_brush()))
             gc.SetPen(gc.CreatePen(border_pen))
@@ -5701,6 +7050,17 @@ class BreadboardCanvas(wx.Panel):
             gc.DrawRectangle(-body_half, -body_h / 2, body_w, body_h)
         elif comp_def.type_id == 'R':
             gc.DrawPath(_make_res_path(gc, body_half))
+        elif comp_def.type_id in ('D', 'D_Zener'):
+            gc.DrawRoundedRectangle(-body_half, -body_h / 2, body_w, body_h, 4)
+            # Cathode stripe (pin 1 = K, at -x side) so the ghost preview
+            # shows orientation the same way the placed component does.
+            stripe = wx.Colour(0xcc, 0xcc, 0xcc)
+            gc.SetBrush(gc.CreateBrush(wx.Brush(stripe)))
+            gc.SetPen(gc.CreatePen(wx.GraphicsPenInfo(wx.TransparentColour)))
+            gc.DrawRectangle(-body_half + 4, -body_h / 2, 4, body_h)
+            gc.SetBrush(gc.CreateBrush(_transparent_brush()))
+            gc.SetPen(gc.CreatePen(border_pen))
+            gc.DrawRoundedRectangle(-body_half, -body_h / 2, body_w, body_h, 4)
         else:
             gc.DrawRoundedRectangle(-body_half, -body_h / 2, body_w, body_h, 4)
 
@@ -5994,7 +7354,7 @@ class BreadboardCanvas(wx.Panel):
         n_rows = 1 + len(entries)   # header + data rows
         box_h = PAD + n_rows * (row_h + ROW_GAP) + PAD
 
-        cw, ch = self.GetClientSize()
+        cw, ch = dc.GetSize()
         MARGIN = 8
         bx = cw - box_w - MARGIN
         by = MARGIN
