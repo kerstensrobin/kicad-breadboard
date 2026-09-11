@@ -115,6 +115,25 @@ class ComponentDef:
         return {pin: offset.resolve(anchor, flipped, cross_flip=self.is_dip, quad_rotate=quad)
                 for pin, offset in self.pin_offsets.items()}
 
+    def place_lenient(self, anchor: TieHole, flipped: int = 0) -> Dict[int, Hole]:
+        """Like place(), but resolves each pin independently: a pin whose
+        computed hole would fall outside the valid grid (e.g. off the left
+        edge of the board) is simply omitted instead of one bad pin
+        discarding every other pin's position too. Used for placement-preview
+        helpers (ratsnest) where partial feedback is better than none;
+        actual placement still goes through the strict place()."""
+        if self.is_dip:
+            anchor = TieHole(anchor.col, 'e', anchor.section)
+        quad = not self.is_dip and not self.is_module and self.pin_count >= 3
+        result: Dict[int, Hole] = {}
+        for pin, offset in self.pin_offsets.items():
+            try:
+                result[pin] = offset.resolve(anchor, flipped, cross_flip=self.is_dip,
+                                              quad_rotate=quad)
+            except (AssertionError, IndexError, KeyError):
+                continue
+        return result
+
     def footprint_cols(self) -> int:
         """Number of breadboard columns the component occupies."""
         deltas = [o.col_delta for o in self.pin_offsets.values()]
@@ -736,7 +755,7 @@ SWITCH_SPST = ComponentDef(
     display_name='Push Button (SPST)',
     ref_prefix='SW',
     pin_offsets={1: PinOffset(0), 2: PinOffset(4)},
-    pin_names={1: 'A', 2: 'B'},
+    pin_names={1: '1', 2: '2'},
     color='#a8a8a8',   # light grey housing
     symmetric=True,
 )
@@ -746,7 +765,7 @@ SWITCH_SPDT = ComponentDef(
     display_name='Slider Switch (SPDT)',
     ref_prefix='SW',
     pin_offsets={1: PinOffset(0), 2: PinOffset(1), 3: PinOffset(2)},
-    pin_names={1: 'A', 2: 'COM', 3: 'B'},
+    pin_names={1: '1', 2: '2', 3: '3'},
     color='#7b5c3a',   # brown housing
 )
 
@@ -755,7 +774,7 @@ SWITCH_SP3T = ComponentDef(
     display_name='Slider Switch (SP3T)',
     ref_prefix='SW',
     pin_offsets={1: PinOffset(0), 2: PinOffset(1), 3: PinOffset(2), 4: PinOffset(3)},
-    pin_names={1: 'A', 2: 'COM', 3: 'B', 4: 'C'},
+    pin_names={1: '1', 2: '2', 3: '3', 4: '4'},
     color='#7b5c3a',   # brown housing
 )
 

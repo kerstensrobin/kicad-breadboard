@@ -41,7 +41,7 @@ from .model import (
     TERMINAL_NAMES,
 )
 
-PLUGIN_VERSION = '1.2.8'
+PLUGIN_VERSION = '1.2.17'
 REPO           = 'kerstensrobin/kicad-breadboard'
 
 # Toolbar button IDs
@@ -291,6 +291,9 @@ class BreadboardWindow(wx.Frame):
         self.Centre()
         self.Show()
         self.Raise()
+        self.canvas.SetFocus()   # no widget has focus by default on Show(); without
+                                  # this, hotkeys like 'W' are silently dropped until
+                                  # some other click gives a control focus first
 
     def _set_icon(self) -> None:
         ico_path = _RESOURCES / 'icon.ico'
@@ -1335,6 +1338,7 @@ class BreadboardWindow(wx.Frame):
             if proceed:
                 from .model import Breadboard
                 self.board = Breadboard(layout=p.board_layout, rail_split=p.rail_split)
+                self._auto_assign_gnd()   # new board has empty terminal_nets — redo it
                 self.canvas.reload_board(self.board)
                 self.tray.board = self.board
                 self.tray.refresh_placed()
@@ -1342,6 +1346,7 @@ class BreadboardWindow(wx.Frame):
                                                   p.show_branding, p.rail_split,
                                                   p.num_terminals)
                 self.canvas._pan_initialized = False
+                self._refresh_terminal_choices()
 
         # Rail split toggle — rebuilds static topology and layout, placements unchanged
         if p.rail_split != old.rail_split:
@@ -1818,13 +1823,7 @@ class BreadboardWindow(wx.Frame):
         ) == wx.YES:
             self.canvas.push_undo()
             self.board = Breadboard(layout=self.prefs.board_layout, rail_split=self.prefs.rail_split)
-            # Re-apply GND assignments
-            _gnd_net = next((n for n in ('0', 'GND') if self.netlist and self.netlist.net_by_name(n)), None)
-            if _gnd_net:
-                self.board.assign_terminal('GND', _gnd_net)
-                if self.prefs.auto_gnd:
-                    for _pname in ('FG_GND', 'SCOPE_GND'):
-                        self.board.assign_probe_net(_pname, _gnd_net)
+            self._auto_assign_gnd()
             self.canvas.reload_board(self.board)
             self.tray.board = self.board
             self.tray.refresh_placed()
@@ -2041,6 +2040,25 @@ class BreadboardWindow(wx.Frame):
                 lbl.SetForegroundColour(wx.Colour(meta['color']))
                 lbl.SetToolTip('')
 
+    def _auto_assign_gnd(self) -> None:
+        """Assign the GND terminal (and, if enabled, the FG_GND/SCOPE_GND
+        instrument probes) to the schematic's ground net ("0" or "GND").
+
+        Called after loading a netlist, and again after swapping self.board
+        for a new layout (Preferences > board layout) — that swap creates a
+        fresh Breadboard with empty terminal_nets, so without re-running this
+        the GND assignment from the already-loaded netlist would silently be
+        lost on the new board.
+        """
+        if not self.netlist:
+            return
+        _gnd_net = next((n for n in ('0', 'GND') if self.netlist.net_by_name(n)), None)
+        if _gnd_net:
+            self.board.assign_terminal('GND', _gnd_net)
+            if self.prefs.auto_gnd:
+                for _pname in ('FG_GND', 'SCOPE_GND'):
+                    self.board.assign_probe_net(_pname, _gnd_net)
+
     def _load_netlist(self, path: str) -> None:
         if path.endswith('.kicad_sch'):
             # Export via kicad-cli first; direct parsing is not used
@@ -2061,13 +2079,7 @@ class BreadboardWindow(wx.Frame):
         self.canvas.netlist = self.netlist
         self.tray.load_netlist(self.netlist)
 
-        # Auto-assign GND terminal and instrument grounds to the ground net ("0" or "GND")
-        _gnd_net = next((n for n in ('0', 'GND') if self.netlist.net_by_name(n)), None)
-        if _gnd_net:
-            self.board.assign_terminal('GND', _gnd_net)
-            if self.prefs.auto_gnd:
-                for _pname in ('FG_GND', 'SCOPE_GND'):
-                    self.board.assign_probe_net(_pname, _gnd_net)
+        self._auto_assign_gnd()
 
         self._refresh_terminal_choices()
         self._refresh_probe_choices()
