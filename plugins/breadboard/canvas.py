@@ -63,10 +63,12 @@ _TO92_BASE_TYPES = frozenset({'NPN', 'PNP', 'JFET_N', 'JFET_P', 'BS170', 'NMOS',
 
 def _is_to92_type(type_id: str) -> bool:
     """True for TO-92-style 3-pin parts, including per-symbol pin-order
-    variants dynamically registered by guess_type_id's _bjt_type_id (e.g.
-    'PNP_ECB' for a part whose schematic pin numbering isn't C-B-E) — those
-    still render as the same TO-92 body as their 'NPN'/'PNP' base."""
-    return type_id in _TO92_BASE_TYPES or type_id.startswith(('NPN_', 'PNP_'))
+    variants dynamically registered by guess_type_id's _pin_order_type_id
+    (e.g. 'PNP_ECB' for a BJT, or 'JFET_N_DGS' for a JFET whose schematic
+    pin numbering doesn't match the base ComponentDef's assumed order) —
+    those still render as the same TO-92 body as their base type."""
+    return type_id in _TO92_BASE_TYPES or type_id.startswith(
+        ('NPN_', 'PNP_', 'JFET_N_', 'JFET_P_', 'NMOS_', 'PMOS_'))
 
 
 def _parse_svg_size(path: str):
