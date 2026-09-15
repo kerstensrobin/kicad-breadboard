@@ -4,7 +4,7 @@
 [![License](https://img.shields.io/github/license/kerstensrobin/kicad-breadboard)](LICENSE)
 [![Stars](https://img.shields.io/github/stars/kerstensrobin/kicad-breadboard)](https://github.com/kerstensrobin/kicad-breadboard/stargazers)
 
-A KiCad 9 / 10 plugin for introductory analog electronics courses. Draw your schematic in Eeschema, then wire it up on a virtual breadboard, validate it against the schematic, and run simple SPICE checks from the breadboard view.
+A KiCad 9 / 10 plugin for introductory analog electronics courses or enthusiasts. Draw your schematic in Eeschema, then wire it up on a virtual breadboard, validate it against the schematic, and run simple SPICE checks from the breadboard view.
 
 <img width="1903" height="1028" alt="Screenshot from 2026-05-12 16-35-15" src="https://github.com/user-attachments/assets/7d0a3ede-aceb-434c-a190-176f87505a63" />
 <img width="1903" height="1028" alt="Screenshot from 2026-05-12 16-35-00" src="https://github.com/user-attachments/assets/86789f64-c4c8-4637-9bec-9b7a30d2c88d" />
