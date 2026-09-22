@@ -41,7 +41,7 @@ from .model import (
     TERMINAL_NAMES,
 )
 
-PLUGIN_VERSION = '1.2.21'
+PLUGIN_VERSION = '1.2.22'
 REPO           = 'kerstensrobin/kicad-breadboard'
 
 # Toolbar button IDs
@@ -1225,6 +1225,8 @@ class BreadboardWindow(wx.Frame):
         saved_layout = result.get('board_layout', 'full')
         if saved_layout != self.prefs.board_layout:
             self.prefs.board_layout = saved_layout
+        if self.board.rail_split != self.prefs.rail_split:
+            self.prefs.rail_split = self.board.rail_split
         self.canvas.layout = CanvasLayout(saved_layout, self.prefs.binding_post_side,
                                           self.prefs.show_branding, self.prefs.rail_split,
                                           self.prefs.num_terminals)

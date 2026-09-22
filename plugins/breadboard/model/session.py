@@ -73,7 +73,7 @@ def save_session(board: Breadboard, netlist_path: Optional[str], path: str,
     doc: Dict[str, Any] = {
         'version': SESSION_VERSION,
         'netlist': netlist_path or '',
-        'board': {'layout': board.layout},
+        'board': {'layout': board.layout, 'rail_split': board.rail_split},
         'terminals': {},
         'placements': [],
         'wires': [],
@@ -166,7 +166,8 @@ def load_session(path: str) -> Dict[str, Any]:
                     h[1] = ref_rename.get(h[1], h[1])
 
     board_cfg = raw.get('board', {})
-    board = Breadboard(layout=board_cfg.get('layout', 'full'))
+    board = Breadboard(layout=board_cfg.get('layout', 'full'),
+                       rail_split=board_cfg.get('rail_split', True))
 
     for name, net in raw.get('terminals', {}).items():
         if name in TERMINAL_NAMES and net:

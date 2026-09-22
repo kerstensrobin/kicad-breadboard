@@ -863,6 +863,18 @@ def _pin_order_type_id(base_type: str, sim_pins: str) -> str:
     return type_id
 
 
+def _module_ok(type_id: str, pin_count: int) -> bool:
+    """
+    Guard against typing a small generic connector as a board module just
+    because its free-text value/symbol happens to mention the module's name
+    (e.g. a 7-pin header valued "to Pico"). KiCad emits every unconnected
+    pin as its own single-node net, so pin_count reflects the symbol's full
+    pin count regardless of how much of it is actually wired — a real module
+    symbol will always report (close to) its true pin count.
+    """
+    return not pin_count or pin_count >= 0.5 * ALL_DEFS[type_id].pin_count
+
+
 def guess_type_id(ref: str, value: str, symbol: str, lib: str = '',
                   description: str = '', pin_count: int = 0,
                   properties: Optional[Dict[str, str]] = None) -> Optional[str]:
@@ -893,10 +905,11 @@ def guess_type_id(ref: str, value: str, symbol: str, lib: str = '',
     # Catches: Arduino_Nano_v2.x, Arduino_Nano_v3.x, Arduino_Nano_Every,
     #          Arduino_Nano_ESP32, Arduino_Nano_RP2040_Connect, etc.
     if 'ARDUINO' in v or 'ARDUINO' in s:
-        if 'UNO' in s or 'UNO' in v:
-            return 'Arduino_Uno'
-        return 'Arduino_Nano'
-    if 'TEENSY' in v or 'TEENSY' in s:
+        _uno = 'UNO' in s or 'UNO' in v
+        _tid = 'Arduino_Uno' if _uno else 'Arduino_Nano'
+        if _module_ok(_tid, pin_count):
+            return _tid
+    if ('TEENSY' in v or 'TEENSY' in s) and _module_ok('Teensy_41', pin_count):
         return 'Teensy_41'
     # Full-size Raspberry Pi (40-pin GPIO header, BCM numbering).
     # Catches: Raspberry_Pi_4B, Raspberry_Pi_3B, Raspberry_Pi_Zero, etc.
@@ -907,12 +920,12 @@ def guess_type_id(ref: str, value: str, symbol: str, lib: str = '',
                  or 'RP2040' in v or 'RP2040' in s
                  or 'RP2350' in v or 'RP2350' in s
                  or 'RP2354' in v or 'RP2354' in s)
-    if _rpi_hit and not _pico_hit:
+    if _rpi_hit and not _pico_hit and _module_ok('Raspberry_Pi_4', pin_count):
         return 'Raspberry_Pi_4'
     # RPi Pico / RP2040 / RP2350 variants.
     # Catches: RaspberryPi_Pico, RaspberryPi_Pico_W, RaspberryPi_Pico_Debug,
     #          RaspberryPi_Pico_Extensive, RP2040, RP2350A/B, RP2354A/B.
-    if _pico_hit or _rpi_hit:
+    if (_pico_hit or _rpi_hit) and _module_ok('RPi_Pico', pin_count):
         return 'RPi_Pico'
 
     # Exact value/symbol matches first
